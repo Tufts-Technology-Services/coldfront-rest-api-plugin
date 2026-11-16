@@ -1,14 +1,41 @@
 # coldfront-rest-api-plugin
 
-A [ColdFront](https://coldfront.readthedocs.io/) plugin that will serve a read-only REST API for
-other Tufts systems: a person's projects, allocations filtered by resource, and a person's
-storage quotas and usage, read live from VAST.
+A [ColdFront](https://coldfront.readthedocs.io/) plugin that serves a read-only REST API for
+other Tufts systems: a person's projects, allocations filtered by resource, the quota and usage
+of a person's home and scratch, and live usage for storage allocations.
 
 It replaces ColdFront's own API plugin (`PLUGIN_API`), which has no filters or pagination and
 returns private attributes to anyone who can see the project.
 
-**Status:** set up, nothing built yet. The design, decisions and phases are in
-[docs/rest-api-plan.md](docs/rest-api-plan.md).
+**Status:** the projects endpoint is built; allocations and storage are to come. The
+design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.md).
+
+## Endpoints
+
+- `GET /api/v2/users/<username>/projects/`: the Active projects a person is an Active member or
+  PI of, with their membership and project attributes. Paginated: 100 per page, up to 1000 with
+  `?page_size=`.
+
+Every endpoint is also served at `/api/latest/...` and at `/api/...` with no version, both of
+which follow the newest version: today, v2. A system that mustn't break when a v3 arrives should
+call `/api/v2/`.
+
+Anyone can ask about themselves. Staff, superusers and accounts with the
+`rest_api.view_any_person` permission can ask about anyone; for anyone else, another person's
+username is a 404. Only superusers see private attributes.
+
+### Service accounts
+
+A system calling the API gets an ordinary user, with no staff flag and an unusable password, that
+holds `rest_api.view_any_person` ("Can look up any person through the REST API" in the admin),
+and a token an admin issues:
+
+```bash
+coldfront drf_create_token <username>
+```
+
+Callers send it as `Authorization: Token <token>`. Each lookup a service account makes is logged
+at INFO to the `rest_api.lookups` logger.
 
 ## Requirements
 
@@ -41,7 +68,8 @@ REST_FRAMEWORK = {
 }
 ```
 
-and mounts `rest_api.urls` at `api/`. The endpoints are under `/api/v1/`.
+and mounts `rest_api.urls` at `api/`. The endpoints are under `/api/v2/` (ColdFront's built-in
+API, which used to be at `/api/`, counts as v1), `/api/latest/` and `/api/`.
 
 ## Development
 
@@ -66,3 +94,5 @@ top of the file, and is listed here:
 
 - `rest_api/tests/settings.py`: the `REST_FRAMEWORK` settings, from ColdFront's
   `coldfront/config/plugins/api.py`.
+- `rest_api/serializers.py`: the project, project user and project attribute serializers, from
+  ColdFront's `coldfront/plugins/api/serializers.py`.
