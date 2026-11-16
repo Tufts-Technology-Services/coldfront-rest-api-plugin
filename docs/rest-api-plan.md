@@ -105,9 +105,12 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   superusers see public attributes only, as on the web pages. The response shape is the same
   for every caller: each attribute carries `"is_private"`, so superusers can tell the two apart
   and other callers just never see `true`.
-- **Staff can look up anyone** (decided 2026-11-16), as they could in v1.
-  Seeing anyone's data and seeing private attributes are separate: staff get the first, only
-  superusers get the second.
+- **ColdFront's rules decide who sees what** (decided 2026-11-16). The API never shows more than
+  ColdFront's own pages would. Seeing everyone's projects takes superuser or ColdFront's
+  `project.can_view_all_projects`; everyone's allocations, superuser or
+  `allocation.can_view_all_allocations`. The staff flag alone isn't enough, as in ColdFront.
+  (This replaces a decision earlier the same day that staff could look up anyone.) Seeing
+  anyone's data and seeing private attributes stay separate: only superusers get the second.
 - **A service account can ask about anyone, but only with a dedicated permission, and never
   sees private attributes** (decided 2026-11-02). See [Who can see what](#who-can-see-what).
 - **Only Active projects** (decided 2026-11-02). The projects endpoint lists Active projects
@@ -119,12 +122,17 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
 
 ## Who can see what
 
-| Caller | Own data | Anyone's data | Private attributes |
-| --- | --- | --- | --- |
-| Any authenticated user | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no |
-| Superusers | yes | yes | yes |
-| Staff who aren't superusers | yes | yes | no |
-| A service account with `rest_api.view_any_person` | yes | yes | no |
+| Caller | Own data | Anyone's projects | Anyone's allocations | Private attributes |
+| --- | --- | --- | --- | --- |
+| Any authenticated user, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no |
+| Superusers | yes | yes | yes | yes |
+| Holders of ColdFront's `project.can_view_all_projects` | yes | yes | no | no |
+| Holders of ColdFront's `allocation.can_view_all_allocations` | yes | no | yes | no |
+| A service account with `rest_api.view_any_person` | yes | yes | yes | no |
+
+"Own data" follows ColdFront's rules too: on the allocations endpoint, an ordinary user sees the
+allocations ColdFront's allocation list would show them (see
+[`/allocations/`](#get-apiv2allocations)).
 
 **The service account permission is the API's own,** not ColdFront's
 `project.can_view_all_projects` / `allocation.can_view_all_allocations`. ColdFront's web
@@ -147,7 +155,7 @@ project and allocation in the UI. `view_any_person` means nothing outside this A
 - **Every request a service account makes is logged** with the username it asked about, so
   there is a record of who looked up whom: at INFO, to the `rest_api.lookups` logger, as
   `<caller> looked up <username>: <path>`. A service account here is a caller with
-  `view_any_person` who is neither staff nor a superuser.
+  `view_any_person` who isn't a superuser.
 
 ## The token page
 
@@ -569,7 +577,7 @@ coldfront-rest-api-plugin/
         checks.py        # DRF and authtoken installed, coldfront.plugins.api not
         models.py        # ApiAccess: unmanaged, no table; carries view_any_person
         migrations/      # creates ApiAccess's permission, not a table
-        permissions.py   # can see anyone (staff, superusers, view_any_person) vs. only yourself
+        permissions.py   # who sees everyone's projects or allocations, ColdFront's rules
         serializers.py   # attribute serializers: private ones for superusers only
         filters.py       # AllocationFilter (django-filter FilterSet)
         views.py
@@ -615,10 +623,10 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 ## Testing
 
 - DRF's `APIClient` with `force_authenticate`, in `rest_api/tests/test_*.py`.
-- A permission matrix per endpoint: the person themselves, another user (404), staff who
-  aren't superusers, superusers, and a service account with and without `view_any_person`.
-  Also a user holding ColdFront's `can_view_all_*` permissions but not ours, who still gets a
-  404 for someone else.
+- A permission matrix per endpoint: the person themselves, another user (404), staff without a
+  permission (404), superusers, holders of the matching ColdFront `can_view_all_*` permission
+  (and of the other one, who get a 404), and a service account with and without
+  `view_any_person`.
 - Private attributes appear for superusers and for nobody else: not staff who aren't
   superusers, not the person themselves, not a service account.
 - A service account's lookups are logged with the username asked about.
@@ -650,7 +658,9 @@ None. Answered 2026-11-02 (the first three here on 2026-11-16) and written into
   at Tufts uses v1.
 - Superusers see private attributes; nobody else does, staff who aren't superusers and service
   accounts included. This matches ColdFront's web pages.
-- Staff can look up anyone's projects, allocations and storage, as they could in v1.
+- Who sees everyone follows ColdFront: superusers and holders of ColdFront's
+  `can_view_all_projects` or `can_view_all_allocations` for that kind of data, plus service
+  accounts with `view_any_person`. Staff alone don't.
 - A service account may ask about anyone, only with `rest_api.view_any_person`.
 - Only Active projects; membership is an Active `ProjectUser` row or being the PI.
 - Resource filters match partially (`icontains`).

@@ -22,20 +22,22 @@ def api_client():
 
 @pytest.fixture
 def make_user(db):
-    """A user by username; staff, superuser or holding view_any_person as asked."""
+    """
+    A user by username; staff or superuser as asked, holding view_any_person if asked, and any
+    other permissions named "app_label.codename" in perms (ColdFront's can_view_all_*, say).
+    """
 
-    def _make(username, *, staff=False, superuser=False, view_any_person=False):
+    def _make(username, *, staff=False, superuser=False, view_any_person=False, perms=()):
         user = User.objects.create_user(username, f"{username}@example.com", "secret")
         user.is_staff = staff
         user.is_superuser = superuser
         user.save()
-        if view_any_person:
-            user.user_permissions.add(
-                Permission.objects.get(content_type__app_label="rest_api", codename="view_any_person")
-            )
-            # has_perm caches a user's permissions on first use, so hand back a fresh copy
-            user = User.objects.get(pk=user.pk)
-        return user
+        names = list(perms) + (["rest_api.view_any_person"] if view_any_person else [])
+        for name in names:
+            app_label, codename = name.split(".")
+            user.user_permissions.add(Permission.objects.get(content_type__app_label=app_label, codename=codename))
+        # has_perm caches a user's permissions on first use, so hand back a fresh copy
+        return User.objects.get(pk=user.pk) if names else user
 
     return _make
 

@@ -20,8 +20,10 @@ Every endpoint is also served at `/api/latest/...` and at `/api/...` with no ver
 which follow the newest version: today, v2. A system that mustn't break when a v3 arrives should
 call `/api/v2/`.
 
-Anyone can ask about themselves. Staff, superusers and accounts with the
-`rest_api.view_any_person` permission can ask about anyone; for anyone else, another person's
+Who sees what follows ColdFront's own rules. Anyone can ask about themselves. Superusers can ask
+about anyone, as can holders of ColdFront's `project.can_view_all_projects` (for projects) or
+`allocation.can_view_all_allocations` (for allocations), and service accounts with the API's
+`rest_api.view_any_person`. The staff flag alone isn't enough. For anyone else, another person's
 username is a 404. Only superusers see private attributes.
 
 ### Your own token

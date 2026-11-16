@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from coldfront.core.project.models import Project, ProjectAttribute, ProjectUser
 
 from rest_api.pagination import ApiPagination
-from rest_api.permissions import can_view_any_person, is_service_account, sees_private_attributes
+from rest_api.permissions import can_view_all_projects, is_service_account, sees_private_attributes
 from rest_api.serializers import UserProjectSerializer
 
 # who looked up whom, for service accounts; see docs/rest-api-plan.md
@@ -18,7 +18,12 @@ lookup_logger = logging.getLogger("rest_api.lookups")
 
 
 class PersonLookupMixin:
-    """For views about the person `<username>` names: who may ask, and the record of who asked."""
+    """
+    For views about the person `<username>` names: who may ask, and the record of who asked.
+    `can_view_all` is the permissions check that lets a caller ask about someone else.
+    """
+
+    can_view_all = None
 
     def get_person(self):
         """
@@ -29,7 +34,7 @@ class PersonLookupMixin:
         username = self.kwargs["username"]
         if is_service_account(caller):
             lookup_logger.info("%s looked up %s: %s", caller.username, username, self.request.path)
-        if username != caller.username and not can_view_any_person(caller):
+        if username != caller.username and not self.can_view_all(caller):
             raise Http404
         return get_object_or_404(User, username=username)
 
@@ -40,6 +45,7 @@ class UserProjectsView(PersonLookupMixin, ListAPIView):
     permission_classes = [IsAuthenticated]
     pagination_class = ApiPagination
     serializer_class = UserProjectSerializer
+    can_view_all = staticmethod(can_view_all_projects)
 
     def get_queryset(self):
         person = self.get_person()
