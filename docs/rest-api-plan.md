@@ -1,7 +1,8 @@
 # Plan: Tufts REST API
 
 Status: agreed, 2026-11-02; revised 2026-11-16 to replace ColdFront's API with a plugin of our
-own. Nothing built yet. The open questions are answered; see [Decisions](#decisions).
+own, and to split storage into one request per area or allocation. Phase 1 is built; see
+[Phases](#phases). The open questions are answered; see [Decisions](#decisions).
 
 ## Goal
 
@@ -10,19 +11,21 @@ A read-only REST API that other Tufts systems can call for:
 1. **A person's projects:** every project someone belongs to, with its project attributes.
 2. **Allocations:** filterable by the resource type and resource name of the allocation, with
    their public allocation attributes.
-3. **Storage quotas:** the quota and usage of a person's home folder and scratch space, read live
-   from VAST.
+3. **Storage:** the quota and live usage of a person's own storage, their home folder and
+   scratch, which aren't ColdFront allocations; and live usage for a project's storage
+   allocations. Each request asks one storage system.
 
-## Why not ColdFront's API
+## Why not ColdFront's API (v1)
 
-ColdFront ships an API plugin, `coldfront.plugins.api`, and the Tufts hosts turn it on today
-(`PLUGIN_API: true` in coldfront-ansible's `group_vars/tufts/main.yml`). It serves read-only
-endpoints under `/api/` (`projects`, `allocations`, `resources`, `users`, `allocation-requests`,
-`allocation-change-requests`) and `POST /api/regenerate-token/`.
+ColdFront ships an API plugin, `coldfront.plugins.api`, which the Tufts hosts turned on
+(`PLUGIN_API: true` in coldfront-ansible's `group_vars/tufts/main.yml`) until phase 0 turned it
+off. It serves read-only endpoints under `/api/` (`projects`, `allocations`, `resources`,
+`users`, `allocation-requests`, `allocation-change-requests`) and `POST /api/regenerate-token/`.
+This plan calls it **v1**, and this plugin's API **v2** (see [Decisions](#decisions)).
 
 It doesn't cover what we need:
 
-| Need | ColdFront's `/api/` |
+| Need | v1 |
 | --- | --- |
 | Another person's projects | Only the caller's own. Staff see everyone's, with no way to filter by person. |
 | Filter allocations by resource | No filters on `allocations` at all. |
@@ -30,18 +33,18 @@ It doesn't cover what we need:
 | Home and scratch quotas | Nothing. |
 | Pagination | None. Every list returns every row. |
 
-**The private attribute leak is live in production today.** Any user with a token can read the
-private attributes of their own projects and allocations through `/api/`, including anything
-ColdFront's web pages show only to superusers.
+**The private attribute leak is live in production until phase 0 is deployed.** Any user with a
+token can read the private attributes of their own projects and allocations through v1,
+including anything ColdFront's web pages show only to superusers.
 
 **Decided 2026-11-16: turn `PLUGIN_API` off and write our own API as a new plugin.** Nobody at
-Tufts uses ColdFront's `/api/`. Turning it off closes the leak with a settings change and no
+Tufts uses v1. Turning it off closes the leak with a settings change and no
 patch to the fork, and leaves one API with one set of visibility rules instead of two. This
 replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serializers.
 
 ## What turning `PLUGIN_API` off changes
 
-`PLUGIN_API` does more than serve `/api/` (`coldfront/config/plugins/api.py`). It adds
+`PLUGIN_API` does more than serve v1 (`coldfront/config/plugins/api.py`). It adds
 `django_filters`, `rest_framework`, `rest_framework.authtoken` and `coldfront.plugins.api` to
 `INSTALLED_APPS` and sets `REST_FRAMEWORK`. With it off:
 
@@ -55,9 +58,9 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   the default filter backend. Pagination is set per view (see [Decisions](#decisions)).
 - **`rest_framework.authtoken` stays installed,** so its table and any tokens already issued
   survive.
-- **`POST /api/regenerate-token/` goes away.** Service accounts get their tokens from an admin
+- **v1's `POST /api/regenerate-token/` goes away.** Service accounts get their tokens from an admin
   anyway. If ordinary users ever need their own tokens, the plugin adds a small endpoint.
-- **ColdFront's staff-only endpoints** (`users`, `allocation-requests`,
+- **v1's staff-only endpoints** (`users`, `allocation-requests`,
   `allocation-change-requests`) go with it. Nobody uses them.
 
 ## Decisions
@@ -68,7 +71,7 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   plugin conventions: a simple `AppConfig`, hatchling, uv, tests in `rest_api/tests/`, the
   shared ruff setup, CI and pre-commit. It depends on `coldfront`, `djangorestframework` and
   `django-filter`; `coldfront_utils` and `coldfront-storage-plugin` (both from git) come in with
-  the storage quota endpoint, which is the first thing to need them.
+  the storage endpoints, the first things to need them.
 - **Credit ColdFront's API for what we reuse** (decided 2026-11-16). Where code is copied or
   adapted from `coldfront.plugins.api` (its serializers, viewsets, the `REST_FRAMEWORK`
   settings), the file says so in a comment at the top, naming the source file and "(C) ColdFront
@@ -78,9 +81,20 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
 - **System checks guard the settings.** The plugin refuses to start if `rest_framework` or
   `rest_framework.authtoken` isn't installed, or if `coldfront.plugins.api` is (`PLUGIN_API`
   back on would bring the leak back and clash with the mount point).
-- **Mount at `/api/v1/`** (`{app: rest_api, urls: api/}` in coldfront-ansible), now that
-  ColdFront's `/api/` is off. The version in the path lets a response shape change later
+- **Mount at `/api/v2/`** (`{app: rest_api, urls: api/}` in coldfront-ansible), now that v1
+  is off. ColdFront's built-in API counts as v1 (decided 2026-11-16), so the version says this
+  is a different API from v1, not a first release of it. v1 was never versioned in its paths:
+  it was served at `/api/` itself. The version in the path also lets a response shape change later
   without breaking callers.
+- **`latest` and no version follow the newest version** (decided 2026-11-16). Every endpoint is
+  also served at `/api/latest/...` and at `/api/...` with no version, both answering as v2 for
+  now. When a v3 arrives, they move to v3 and `/api/v2/` stays. A system that mustn't break
+  when that happens should call `/api/v2/`. The unversioned paths take over v1's old prefix,
+  so an old v1 URL such as `/api/users/` is no longer v1's: it is a 404, or a v2 route where
+  the paths happen to match. Nobody calls v1, and `rest_api.E002` stops the two being installed
+  together. Each prefix is its own URL namespace
+  (`rest_api:v2`, `rest_api:latest`, `rest_api:unversioned`), and a page's `next` and
+  `previous` links stay on the prefix the caller used.
 - **Read-only.** Every view is a `ReadOnlyModelViewSet` or a `GET`-only `APIView`.
 - **People are named by username** (the UTLN), the same key Grouper, AD and the cluster use.
 - **Superusers see private attributes; everyone else sees public ones only** (decided
@@ -90,7 +104,7 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   superusers see public attributes only, as on the web pages. The response shape is the same
   for every caller: each attribute carries `"is_private"`, so superusers can tell the two apart
   and other callers just never see `true`.
-- **Staff can look up anyone** (decided 2026-11-16), as they could in ColdFront's `/api/`.
+- **Staff can look up anyone** (decided 2026-11-16), as they could in v1.
   Seeing anyone's data and seeing private attributes are separate: staff get the first, only
   superusers get the second.
 - **A service account can ask about anyone, but only with a dedicated permission, and never
@@ -114,11 +128,13 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
 **The service account permission is the API's own,** not ColdFront's
 `project.can_view_all_projects` / `allocation.can_view_all_allocations`. ColdFront's web
 pages check those two as well, so granting them would also let the account browse every
-project and allocation in the UI. `view_any_person` means nothing outside `/api/v1/`.
+project and allocation in the UI. `view_any_person` means nothing outside this API.
 
-- **Defining it adds no table.** A data migration creates the permission against a
-  `rest_api | api` content type that has no table behind it, the usual way to define a
-  permission that isn't about a model.
+- **Defining it adds no table.** The permission is declared on `rest_api.models.ApiAccess`, an
+  unmanaged model (`managed = False`) that exists only to carry it, so Django creates the
+  permission and its content type and no table. (Changed 2026-11-16 from a data migration on a
+  content type with no model: `manage.py remove_stale_contenttypes` would delete such a content
+  type, and with it the permission and every grant of it.)
 - **A service account is an ordinary Django user** with that permission, an unusable password
   (so it can't log in to the web UI, only use its token) and `is_staff` off.
 - **Its token is issued by an admin,** with DRF's `manage.py drf_create_token <username>` or in
@@ -127,14 +143,17 @@ project and allocation in the UI. `view_any_person` means nothing outside `/api/
   can read, not *what*. If a service ever needs private attributes, that is a second permission,
   not a staff or superuser flag on the account.
 - **Every request a service account makes is logged** with the username it asked about, so
-  there is a record of who looked up whom.
+  there is a record of who looked up whom: at INFO, to the `rest_api.lookups` logger, as
+  `<caller> looked up <username>: <path>`. A service account here is a caller with
+  `view_any_person` who is neither staff nor a superuser.
 
 ## Endpoints
 
-### `GET /api/v1/users/<username>/projects/`
+### `GET /api/v2/users/<username>/projects/`
 
 The **Active** projects `<username>` is an **Active** member of, plus any Active project they are
-PI of. Projects in any other status (New, Archived, ...) are left out.
+PI of. Projects in any other status (New, Archived, ...) are left out. They are listed in title
+order.
 
 ```json
 {
@@ -159,11 +178,12 @@ PI of. Projects in any other status (New, Archived, ...) are left out.
 
 `membership` is that person's own `ProjectUser` row, so a caller can tell a PI or an Approver
 (an active Manager who isn't the PI, as defined in tufts-coldfront-plugins'
-[alert audiences plan][alert-audiences]) from a plain member without a second request.
+[alert audiences plan][alert-audiences]) from a plain member without a second request. It is `null` for a PI with no Active
+`ProjectUser` row of their own.
 
 [alert-audiences]: https://github.com/Tufts-Technology-Services/tufts-coldfront-plugins/blob/main/docs/alert-audiences-plan.md#whos-who
 
-### `GET /api/v1/allocations/`
+### `GET /api/v2/allocations/`
 
 Allocations the caller may see (see [Who can see what](#who-can-see-what)), filtered by:
 
@@ -200,84 +220,86 @@ so the filters match an allocation if **any** of its resources match, and the qu
 `usage` comes from `AllocationAttributeUsage`, as in ColdFront's serializer, and is `null`
 for attribute types without usage.
 
-### `GET /api/v1/users/<username>/storage-quotas/`
+### `GET /api/v2/users/<username>/storage/`
 
-Everything about one person's storage, in one response:
-
-- **`areas`:** their quota and usage in each user-quota area on the hpc VAST: their home folder
-  (`/homedir`) and scratch (`/scratch`, added 2026-11-02). Each area is the person's user quota
-  inside that area's directory quota (option A below), looked up the same way.
-- **`allocations`:** quota and usage for each storage allocation they belong to (added
-  2026-11-02), live from VAST where the allocation is on VAST, from ColdFront's stored values
-  where it is on TrueNAS. See [Project allocations](#project-allocations).
+The storage areas that belong to a person rather than to a project: their home folder and
+scratch. These aren't ColdFront allocations, so this is the only place the API reports them. The
+list names each area and the URL to ask about it, and calls no storage system:
 
 ```json
 {
   "username": "smith01",
   "areas": [
-    {
-      "name": "home",
-      "path": "/homedir",
-      "scope": "user",
-      "quota_source": "override",
-      "soft_limit_bytes": 100000000000,
-      "hard_limit_bytes": 100000000000,
-      "used_bytes": 85136281441,
-      "used_inodes": 478373,
-      "state": "OK",
-      "retrieved_at": "2026-11-02T23:39:37Z"
-    },
-    {
-      "name": "scratch",
-      "path": "/scratch",
-      "scope": "user",
-      "quota_source": "default",
-      "soft_limit_bytes": null,
-      "hard_limit_bytes": null,
-      "used_bytes": 0,
-      "used_inodes": 0,
-      "state": "OK",
-      "retrieved_at": "2026-11-02T23:39:37Z"
-    }
-  ],
-  "allocations": [
-    {
-      "allocation": 9031,
-      "project": {"id": 412, "title": "Ocean Modelling"},
-      "resource": "Tier 3 Storage",
-      "source": "vast",
-      "soft_limit_bytes": 10000000000000,
-      "hard_limit_bytes": 10000000000000,
-      "used_bytes": 6200000000000,
-      "state": "OK",
-      "retrieved_at": "2026-11-03T14:05:12Z",
-      "stored_used_bytes": 6150000000000,
-      "usage_reported_at": "2026-11-03T03:00:00Z"
-    },
-    {
-      "allocation": 8120,
-      "project": {"id": 412, "title": "Ocean Modelling"},
-      "resource": "Tier 2 Storage",
-      "source": "stored",
-      "soft_limit_bytes": null,
-      "hard_limit_bytes": 2000000000000,
-      "used_bytes": 1100000000000,
-      "state": null,
-      "quota_reported_at": "2026-11-03T02:00:00Z",
-      "usage_reported_at": "2026-11-03T03:00:00Z"
-    }
+    {"name": "home", "url": "https://rcrm.it.tufts.edu/api/v2/users/smith01/storage/home/"},
+    {"name": "scratch", "url": "https://rcrm.it.tufts.edu/api/v2/users/smith01/storage/scratch/"}
   ]
 }
 ```
 
-(The scratch numbers above are placeholders: nothing about `/scratch` on VAST has been checked
-yet. See [Scratch](#scratch).)
+The areas come from the settings (below), in the order they are listed there. The list isn't
+paginated, since there are only a few. Each `url` stays on the prefix the caller used (`v2`,
+`latest` or none).
 
-- **One list, not one endpoint per area,** so a dashboard gets everything in one request, and a
-  third area later is a settings change, not a new URL.
-- **Each area is looked up separately.** If VAST fails for one area, that area's entry carries
-  `"error": "unavailable"` in place of the numbers and the others are still answered. The
-  response is a 503 only when every area fails.
+### `GET /api/v2/users/<username>/storage/<area>/`
+
+That person's quota and live usage in one area. For home (`/homedir`, on the hpc VAST):
+
+```json
+{
+  "username": "smith01",
+  "area": "home",
+  "path": "/homedir",
+  "scope": "user",
+  "quota_source": "override",
+  "soft_limit_bytes": 100000000000,
+  "hard_limit_bytes": 100000000000,
+  "used_bytes": 85136281441,
+  "used_inodes": 478373,
+  "state": "OK",
+  "retrieved_at": "2026-11-02T23:39:37Z"
+}
+```
+
+Scratch (`/scratch`, added 2026-11-02) answers in the same shape, once its VAST quota is checked;
+see [Scratch](#scratch).
+
+**One area per request** (decided 2026-11-16). This replaces the 2026-11-02 plan of one
+response holding every area and every storage allocation the person belongs to. Areas and
+allocations can each live on a different storage system, and at Tufts many will. In one
+response, the slowest system would set the response time, a failing system would mean a 200
+with per-entry errors, and live and day-old numbers would sit side by side. With one area per
+request:
+
+- **Each request asks one storage system,** so its speed and its failures are that system's
+  alone.
+- **Status codes mean what they say.** An area whose storage system is unreachable or times out
+  is a 503 for that request only. An area name not in the settings is a 404, as is a username
+  ColdFront doesn't know.
+- **Each area is cached on its own,** for as long as suits its storage system.
+- **A new area is a settings change.** It appears in the list above, with no new route.
+
+A dashboard showing home and scratch makes two requests, in parallel if it likes. Live usage
+for project storage is a separate endpoint per allocation; see
+[`/allocations/<id>/usage/`](#get-apiv2allocationsidusage).
+
+**Settings:** `USER_STORAGE_AREAS` maps each area name to the `STORAGE_PLUGIN_CLIENTS` entry
+it lives on and the path of its directory quota there:
+
+```python
+USER_STORAGE_AREAS = {
+    "home": {"client": "hpc", "path": "/homedir"},
+    "scratch": {"client": "hpc", "path": "/scratch"},
+}
+```
+
+- **No default.** A deployment that hasn't set it gets a system check error, not a guess.
+- **Each area names its own client,** so areas needn't share a storage system.
+- **How an area is looked up depends on its client's kind,** the `"type"` key in
+  `STORAGE_PLUGIN_CLIENTS` (see [Where an allocation lives](#where-an-allocation-lives)). Only
+  VAST user quotas are planned, below. An area on a client of any other kind is a system check
+  error until a lookup for that kind is written.
+
+### Home
 
 Home folders live on the **hpc VAST** (`STORAGE_PLUGIN_CLIENTS` key `hpc`), at
 `/cluster/home/<username>` on the cluster (hpc-cli creates them). On VAST they are one directory
@@ -370,16 +392,15 @@ Then:
   `default_user_quota` and every usage field.
 - **Errors:** VAST unreachable or timing out is a 503 with a short message, never VAST's own
   error text, which includes the VMS hostname (the quota's `url` field does too, so it is never
-  passed through). A username ColdFront doesn't know is a 404, as on the other endpoints;
-  VAST is only asked about known users.
-- **Settings:** `USER_QUOTA_CLIENT` (`hpc` at Tufts) and `USER_QUOTA_AREAS`, a name-to-path map
-  (`{"home": "/homedir", "scratch": "/scratch"}`), in the order the response lists them. Neither
-  has a default: a deployment that hasn't set them gets a system check error, not a guess.
+  passed through). It fails only the area asked about. A username ColdFront doesn't know is a
+  404, as on the other endpoints; VAST is only asked about known users.
+- **The area's client and path come from `USER_STORAGE_AREAS`** (see the area endpoint), so
+  the VAST instance asked is the one the area names, not a single user-quota client.
 - **Each area's `path` is its directory quota** (`/homedir`, `/scratch`), the quota the user quota
   sits in, with `"scope": "user"`, so a caller doesn't read it as the size of one folder.
 - **Everything above applies per area:** each area's `system_id` and default limits come from
-  its own `GET /quotas/{id}`, and each person is one `/userquotas/?path=<area>&entity_identifier=`
-  call per area.
+  its own `GET /quotas/{id}`, and a request is one `/userquotas/?path=<area>&entity_identifier=`
+  call (two if it falls back to the UID).
 
 ### Scratch
 
@@ -398,60 +419,103 @@ Checking them takes the same two calls as for home: `GET /quotas/?path=/scratch`
 filtered `/userquotas/` query.
 
 
-### Project allocations
+### `GET /api/v2/allocations/<id>/usage/`
 
-Added 2026-11-02: quota and usage for each storage allocation the person belongs to, as close to
-real time as makes sense.
+Added 2026-11-02, as part of a combined storage response; its own endpoint since 2026-11-16. One
+storage allocation's quota and usage, as close to live as its storage system allows. ColdFront's
+stored quota and usage, the Starfish snapshot up to a day old, are already on the allocations
+endpoint as attributes; this endpoint is for callers that need newer numbers.
 
-**Which allocations:** Active allocations on Active projects where the person is an Active
-`AllocationUser`, limited to resources that have a `StorageHandler` (so only storage). This uses
-ColdFront's own allocation membership rather than project membership: someone can be on a
-project without being on each of its allocations.
+- **Who can ask:** anyone who can see the allocation on the allocations endpoint (see
+  [Who can see what](#who-can-see-what)). For anyone else it is a 404.
+- **Storage only:** an allocation whose resource has no `StorageHandler` is a 404.
+- **Finding a person's storage allocations** is the allocations endpoint's job:
+  `/api/v2/allocations/?username=smith01&resource_type=storage`, then one usage request per
+  allocation. Allocation membership is ColdFront's own (`AllocationUser`), not project
+  membership: someone can be on a project without being on each of its allocations.
 
-**Where each one lives.** The storage plugin already records it:
+#### Where an allocation lives
+
+The storage plugin already records it:
 
 - The allocation's resource has a `StorageHandler` (one per `Resource`) whose `quota_client_id`
   names an entry in `STORAGE_PLUGIN_CLIENTS`: `hpc` or `rstore` (two VAST instances) or
-  `truenas`. So allocations of one person can be spread across VAST instances, and each is asked
-  of its own.
+  `truenas`. Each allocation is asked of its own instance.
 - That client config's `native_path_attribute_name` names the allocation attribute holding the
   path on the storage system (`vast_path` for both VAST instances).
 - **Which kind of system a client is** isn't recorded in its config today, only implied by the
   handler's task names (`storage.vast...` vs `storage.truenas...`). The storage plugin should get
   an explicit `"type": "vast"` / `"truenas"` in each `STORAGE_PLUGIN_CLIENTS` entry
-  (coldfront-ansible's Tufts settings) rather than parse task names.
+  (coldfront-ansible's Tufts settings) rather than parse task names. The storage areas use it
+  too.
 
-**VAST allocations: live.** One `GET /quotas/?path=<vast_path>` to that allocation's VAST
-instance, kept in step with the area lookups:
+#### VAST allocations: live
+
+One `GET /quotas/?path=<vast_path>` to that allocation's VAST instance:
+
+```json
+{
+  "allocation": 9031,
+  "project": {"id": 412, "title": "Ocean Modelling"},
+  "resource": "Tier 3 Storage",
+  "source": "vast",
+  "soft_limit_bytes": 10000000000000,
+  "hard_limit_bytes": 10000000000000,
+  "used_bytes": 6200000000000,
+  "state": "OK",
+  "retrieved_at": "2026-11-03T14:05:12Z",
+  "stored_used_bytes": 6150000000000,
+  "usage_reported_at": "2026-11-03T03:00:00Z"
+}
+```
 
 - **Limits:** `soft_limit` and `hard_limit`, both reported (either can be null). The storage
   plugin's batch task records `soft_limit`, falling back to `hard_limit`, as the allocation's
   quota; callers wanting the one ColdFront shows should do the same.
 - **Usage comes from VAST, not Starfish.** ColdFront's stored usage (`reported_usage_bytes`) is
   written by the Starfish task from a once-a-day snapshot, too stale for this. The directory
-  quota itself reports usage: `used_capacity` or `used_effective_capacity` (see the open
-  question below). Every allocation the storage plugin provisions on VAST gets a directory quota
-  at its path (`add_quota_and_protected_path`), so the quota lookup finds usage too.
+  quota itself reports usage: `used_capacity` or `used_effective_capacity` (see "Still to check"
+  below). Every allocation the storage plugin provisions on VAST gets a directory quota at its
+  path (`add_quota_and_protected_path`), so the quota lookup finds usage too.
 - **`retrieved_at`** is the time of the VAST call. Unlike user quotas, a directory quota carries no
   "last updated" time; VAST keeps directory quota usage current itself.
 - **Cached for a minute or two per path,** so a dashboard refreshing doesn't hit VAST every time,
   while still being close to live. Paths are cached per client, so the same path on two
   instances never collides.
-- **A path VAST has no quota for** gets `"error": "no quota"` for that allocation; the rest of
-  the response is unaffected.
+- **Errors:** the VAST instance unreachable or timing out is a 503, with a short message and never
+  VAST's own error text. A path VAST has no quota for is a 404 with the detail "No quota for this
+  allocation.", so a caller can tell it from an allocation it can't see.
 
-**TrueNAS allocations: stored.** Read from the allocation's attributes, with no call out:
-`reported_quota_bytes` and `quota_report_date` (written by the TrueNAS quota batch task), and
-`reported_usage_bytes` and `usage_report_date` (written by the Starfish usage task, a once-a-day
-snapshot, which Tufts considers adequate for TrueNAS). The entry has `"source": "stored"` and both
-report dates, so a caller can tell how old each number is.
+#### TrueNAS allocations: stored
+
+TrueNAS has no live source, so the response is ColdFront's stored values, read from the
+allocation's attributes with no call out: `reported_quota_bytes` and `quota_report_date` (written
+by the TrueNAS quota batch task), and `reported_usage_bytes` and `usage_report_date` (written by
+the Starfish usage task, a once-a-day snapshot, which Tufts considers adequate for TrueNAS).
+
+```json
+{
+  "allocation": 8120,
+  "project": {"id": 412, "title": "Ocean Modelling"},
+  "resource": "Tier 2 Storage",
+  "source": "stored",
+  "soft_limit_bytes": null,
+  "hard_limit_bytes": 2000000000000,
+  "used_bytes": 1100000000000,
+  "state": null,
+  "quota_reported_at": "2026-11-03T02:00:00Z",
+  "usage_reported_at": "2026-11-03T03:00:00Z"
+}
+```
+
+Answering with the stored values, rather than a 404, means a caller can use the one URL for every
+storage allocation; `"source": "stored"` and the report dates tell it how old the numbers are.
+
+#### For both
 
 **No paths in the response.** The allocation is identified by its id, project and resource
 name. `vast_path` and `Storage Path` are allocation attributes that may be private, and the
 storage system path is never returned to callers who couldn't see it on the allocations endpoint.
-
-**Errors** work as for the areas: a VAST instance that is down marks only its allocations
-`"error": "unavailable"`.
 
 **Still to check:** which VAST usage field to report. On `/homedir` `used_capacity` and
 `used_effective_capacity` were equal. On a project quota where they differ, the field to report
@@ -466,8 +530,10 @@ directory quota at their `vast_path`.
 only in this API's responses and is never written to ColdFront: `reported_usage_bytes` stays
 Starfish's, and the VAST quota batch task keeps storing only quotas. So for a VAST allocation the
 API's `used_bytes` and the usage on ColdFront's allocation page can differ, the API being newer.
-Each VAST allocation entry therefore also carries the stored Starfish figure, `stored_used_bytes`
-with `usage_reported_at`, so a caller can show the number ColdFront shows, or both.
+Each VAST response therefore also carries the stored Starfish figure, `stored_used_bytes` with
+`usage_reported_at`, so a caller can show the number ColdFront shows, or both.
+
+## Layout
 
 ```
 coldfront-rest-api-plugin/
@@ -476,12 +542,13 @@ coldfront-rest-api-plugin/
         __init__.py
         apps.py          # AppConfig; registers the system checks
         checks.py        # DRF and authtoken installed, coldfront.plugins.api not
-        migrations/      # the view_any_person permission (data migration, no tables)
+        models.py        # ApiAccess: unmanaged, no table; carries view_any_person
+        migrations/      # creates ApiAccess's permission, not a table
         permissions.py   # can see anyone (staff, superusers, view_any_person) vs. only yourself
         serializers.py   # attribute serializers: private ones for superusers only
         filters.py       # AllocationFilter (django-filter FilterSet)
         views.py
-        urls.py          # mounted at api/ by coldfront-ansible; routes under v1/
+        urls.py          # mounted at api/ by coldfront-ansible; routes under v2/
         tests/
             settings.py  # coldfront's settings, plus DRF, authtoken and rest_api
 ```
@@ -497,8 +564,9 @@ it, along with the usual in-memory SQLite and MD5 hasher.
    The `authtoken_token` table stays in the database; nothing reads it until the plugin's
    settings put `rest_framework.authtoken` back.
 1. **The plugin and the projects endpoint:** the new repo with its CI and pre-commit, the system
-   checks, the permission class, the `view_any_person` migration, pagination, and the projects
-   endpoint. This sets the patterns the other two follow. Deploy order:
+   checks (`rest_api.E001`: a DRF app missing; `rest_api.E002`: ColdFront's API, v1, installed), the
+   permission, pagination, and the projects endpoint. Built 2026-11-16 on the
+   `projects-endpoint` branch. This sets the patterns the other two follow. Deploy order:
    1. the plugin merged and pushed;
    2. the fork's `tufts` extra names it, and `uv.lock` is updated, committed and pushed;
    3. coldfront-ansible adds `django_filters`, `rest_framework`, `rest_framework.authtoken` and
@@ -506,11 +574,16 @@ it, along with the usual in-memory SQLite and MD5 hasher.
       settings, in the same deploy. Adding the apps before the package is installed would stop
       ColdFront starting; the plugin's system checks stop it starting without the settings.
 2. **Allocations endpoint** with its filters.
-3. **Storage quotas (home, scratch and allocations):** the vast-api-client calls, the `"type"`
-   key in `STORAGE_PLUGIN_CLIENTS`, then the storage plugin functions and their tests, then the
-   endpoint. Scratch needs its VAST quota checked first ([Scratch](#scratch)), and allocations
-   need the usage field settled ([Project allocations](#project-allocations)); home is ready.
-4. **Later:** an OpenAPI schema (drf-spectacular isn't installed today).
+3. **Storage areas:** the `"type"` key in `STORAGE_PLUGIN_CLIENTS`, the vast-api-client user
+   quota calls, the storage plugin's user quota lookup and its tests, then the area list and
+   area endpoints with `USER_STORAGE_AREAS` and its system check. Home is ready. Scratch is
+   added to the settings once its VAST quota is checked ([Scratch](#scratch)), with no code
+   change if it works like home.
+4. **Live allocation usage:** the storage plugin's directory quota lookup, then
+   `/allocations/<id>/usage/`. Needs the allocations endpoint (phase 2) and the VAST usage
+   field settled (see "Still to check" under
+   [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage)).
+5. **Later:** an OpenAPI schema (drf-spectacular isn't installed today).
 
 ## Testing
 
@@ -528,14 +601,15 @@ it, along with the usual in-memory SQLite and MD5 hasher.
   where the person's `ProjectUser` row is Removed.
 - The system checks: an error when `rest_framework` or `rest_framework.authtoken` isn't
   installed, and when `coldfront.plugins.api` is.
-- Storage quotas with a fake VAST client, like `FakeTrueNASClient` in the storage plugin's
-  `test_tasks.py`: found by username, found by UID, no entry (default limits, 0 used), one area
-  failing while the other answers, every area failing (503), and the cache answering a second
-  request.
-- Allocations: a VAST allocation on each of two instances asked of its own instance, a TrueNAS
-  allocation read from stored attributes with no call out, an allocation on a non-storage
-  resource left out, one instance down marking only its allocations, and no path in any
-  response.
+- Storage areas with a fake VAST client, like `FakeTrueNASClient` in the storage plugin's
+  `test_tasks.py`: the area list in settings order with no call out, found by username, found
+  by UID, no entry (default limits, 0 used), each area asking the client its settings name, an
+  unknown area (404), VAST failing (503), and the cache answering a second request. The system
+  check: `USER_STORAGE_AREAS` unset, or naming a client that doesn't exist or isn't VAST.
+- Allocation usage: a VAST allocation on each of two instances asked of its own instance, a
+  TrueNAS allocation read from stored attributes with no call out, a non-storage allocation and
+  one the caller can't see (both 404), no VAST quota at the path (404 with its own detail), the
+  instance down (503), and no path in any response.
 - A query-count test on each list (`django_assert_max_num_queries`), so a missing
   `prefetch_related` shows up as a failure, not as a slow page in production.
 
@@ -545,17 +619,18 @@ None. Answered 2026-11-02 (the first three here on 2026-11-16) and written into
 [Decisions](#decisions) and the endpoint sections:
 
 - `PLUGIN_API` goes off and the API is a new plugin, `rest_api`, mounted at
-  `/api/v1/`. Nobody at Tufts uses ColdFront's `/api/`.
+  `/api/v2/` (also `/api/latest/` and `/api/`), with ColdFront's API counting as v1. Nobody
+  at Tufts uses v1.
 - Superusers see private attributes; nobody else does, staff who aren't superusers and service
   accounts included. This matches ColdFront's web pages.
-- Staff can look up anyone's projects, allocations and quotas, as they could in ColdFront's
-  `/api/`.
+- Staff can look up anyone's projects, allocations and storage, as they could in v1.
 - A service account may ask about anyone, only with `rest_api.view_any_person`.
 - Only Active projects; membership is an Active `ProjectUser` row or being the PI.
 - Resource filters match partially (`icontains`).
 - Home folders: option A, the person's user quota inside `/homedir`, looked up per person with
   `/userquotas/?path=/homedir&entity_identifier=`, UIDs resolved with `getent`.
-- Scratch (`/scratch`) is reported the same way, in the same response. Its VAST quota is not
+- Scratch (`/scratch`) is reported the same way, as its own area. Its VAST quota is not
   checked yet; see [Scratch](#scratch).
-- The person's storage allocations are in the same response: live from VAST, stored values for
-  TrueNAS. See [Project allocations](#project-allocations).
+- Storage is one request per area (`users/<username>/storage/<area>/`) and per allocation
+  (`allocations/<id>/usage/`), not one response for everything (2026-11-16): each request asks
+  one storage system. Allocations are live from VAST, stored values for TrueNAS.
