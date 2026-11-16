@@ -3,6 +3,14 @@ from django.contrib.auth.models import Permission, User
 from rest_framework.test import APIClient
 
 from coldfront.core.test_helpers.factories import (
+    AAttributeTypeFactory,
+    AllocationAttributeFactory,
+    AllocationAttributeTypeFactory,
+    AllocationAttributeUsageFactory,
+    AllocationFactory,
+    AllocationStatusChoiceFactory,
+    AllocationUserFactory,
+    AllocationUserStatusChoiceFactory,
     FieldOfScienceFactory,
     PAttributeTypeFactory,
     ProjectAttributeFactory,
@@ -12,6 +20,8 @@ from coldfront.core.test_helpers.factories import (
     ProjectUserFactory,
     ProjectUserRoleChoiceFactory,
     ProjectUserStatusChoiceFactory,
+    ResourceFactory,
+    ResourceTypeFactory,
 )
 
 
@@ -81,5 +91,62 @@ def add_project_attribute(db):
             name=name, attribute_type=PAttributeTypeFactory(name="Text"), is_private=is_private
         )
         return ProjectAttributeFactory(project=project, proj_attr_type=attribute_type, value=value)
+
+    return _add
+
+
+@pytest.fixture
+def make_resource(db):
+    """A resource by name, of the named resource type (Storage unless given)."""
+
+    def _make(name, resource_type="Storage"):
+        return ResourceFactory(name=name, resource_type=ResourceTypeFactory(name=resource_type))
+
+    return _make
+
+
+@pytest.fixture
+def make_allocation(db, make_resource):
+    """An allocation on a project, of the named resources, in the named status (Active unless given)."""
+
+    def _make(project, resources=("Tier 2 Storage",), status="Active", start_date=None, end_date=None):
+        allocation = AllocationFactory(
+            project=project,
+            status=AllocationStatusChoiceFactory(name=status),
+            start_date=start_date,
+            end_date=end_date,
+        )
+        allocation.resources.set([make_resource(name) for name in resources])
+        return allocation
+
+    return _make
+
+
+@pytest.fixture
+def add_allocation_user(db):
+    """Put a user on an allocation, with the named status (Active unless given)."""
+
+    def _add(allocation, user, status="Active"):
+        return AllocationUserFactory(
+            allocation=allocation, user=user, status=AllocationUserStatusChoiceFactory(name=status)
+        )
+
+    return _add
+
+
+@pytest.fixture
+def add_allocation_attribute(db):
+    """Give an allocation an attribute, creating its type (public unless is_private) if needed, and its usage if given."""
+
+    def _add(allocation, name, value, is_private=False, usage=None):
+        attribute_type = AllocationAttributeTypeFactory(
+            name=name, attribute_type=AAttributeTypeFactory(name="Text"), is_private=is_private
+        )
+        attribute = AllocationAttributeFactory(
+            allocation=allocation, allocation_attribute_type=attribute_type, value=value
+        )
+        if usage is not None:
+            AllocationAttributeUsageFactory(allocation_attribute=attribute, value=usage)
+        return attribute
 
     return _add

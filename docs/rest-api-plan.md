@@ -154,9 +154,11 @@ project and allocation in the UI. `view_any_person` means nothing outside this A
 - **Private attributes stay superuser-only.** `view_any_person` widens *whose* data an account
   can read, not *what*. If a service ever needs private attributes, that is a second permission,
   not a staff or superuser flag on the account.
-- **Every request a service account makes is logged** with the username it asked about, so
-  there is a record of who looked up whom: at INFO, to the `rest_api.lookups` logger, as
-  `<caller> looked up <username>: <path>`. A service account here is a caller with
+- **Every request a service account makes is logged** with what it asked about, so there is a
+  record of who looked up whom: at INFO, to the `rest_api.lookups` logger, as
+  `<caller> looked up <username>: <path>`, `<caller> looked up allocations: <path and query>`
+  (the query shows the filters, `?username=` included) and
+  `<caller> looked up allocation <id>: <path>`. A service account here is a caller with
   `view_any_person` who isn't a superuser.
 
 ## The token page
@@ -225,7 +227,18 @@ The projects `<username>` is an **Active** member of, plus any they are PI of, i
 
 ### `GET /api/v2/allocations/`
 
-Allocations the caller may see (see [Who can see what](#who-can-see-what)), filtered by:
+The allocations ColdFront's allocation list would show the caller (decided 2026-11-16: the API
+uses ColdFront's rules):
+
+- **Callers who can see all allocations** (superusers, holders of
+  `allocation.can_view_all_allocations`, and service accounts with `view_any_person`) see every
+  allocation, as ColdFront's "show all allocations" does, whatever its project's status.
+- **Everyone else** sees allocations on New or Active projects where they have an Active
+  `ProjectUser` row and either that row's role is Manager (so a project's PI and Approvers see
+  all its allocations) or they are an Active or PendingEULA `AllocationUser` of the allocation.
+- **Every allocation status** is listed unless `?status=` narrows it, as in ColdFront.
+
+The list can be filtered by:
 
 | Parameter | Matches | Example |
 | --- | --- | --- |
@@ -235,7 +248,7 @@ Allocations the caller may see (see [Who can see what](#who-can-see-what)), filt
 | `project` | `project_id` | `?project=412` |
 | `username` | an Active `AllocationUser`, or the project's PI | `?username=smith01` |
 
-Only allocations on New or Active projects are listed. Each filter can be repeated to match any of
+Each filter can be repeated to match any of
 several values (`?resource=A&resource=B`). For the partial filters, that is an OR of
 `icontains` lookups, so they are method filters, not django-filter's `BaseInFilter`. Partial
 matching means `?resource=Storage` matches every resource with "Storage" in its name; callers
@@ -259,6 +272,16 @@ so the filters match an allocation if **any** of its resources match, and the qu
 
 `usage` comes from `AllocationAttributeUsage`, as in ColdFront's serializer, and is `null`
 for attribute types without usage.
+
+### `GET /api/v2/allocations/<id>/`
+
+One allocation, in the same shape as in the list (added 2026-11-16). Who may see it is
+ColdFront's allocation page's rule: superusers, holders of `allocation.can_view_all_allocations`
+and service accounts with `view_any_person`, and anyone else for whom
+`Allocation.has_perm(user, AllocationPermission.USER)` is true: an Active or New `ProjectUser`
+row on its project, and either the PI or Manager role, or an Active, New or PendingEULA
+`AllocationUser` row. Anyone else gets a 404, the same as for an allocation that doesn't exist.
+`/allocations/<id>/usage/` uses the same rule.
 
 ### `GET /api/v2/users/<username>/storage/`
 
@@ -615,7 +638,9 @@ it, along with the usual in-memory SQLite and MD5 hasher.
       `{app: rest_api, urls: api/}` to `tufts_plugin_apps`, and `REST_FRAMEWORK` to the Tufts
       settings, in the same deploy. Adding the apps before the package is installed would stop
       ColdFront starting; the plugin's system checks stop it starting without the settings.
-2. **Allocations endpoint** with its filters.
+2. **Allocations endpoints:** the filtered list and the single allocation, with ColdFront's rules
+   for who sees which. Built 2026-11-16 on the `allocations-endpoint` branch, with the move to
+   ColdFront's permissions and project statuses and the projects endpoint's `?status=`.
 3. **Storage areas:** the `"type"` key in `STORAGE_PLUGIN_CLIENTS`, the vast-api-client user
    quota calls, the storage plugin's user quota lookup and its tests, then the area list and
    area endpoints with `USER_STORAGE_AREAS` and its system check. Home is ready. Scratch is
@@ -642,6 +667,9 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 - New and Active projects appear and Archived ones don't unless `?status=` asks for them
   (each status alone and together, an unknown one a 400, the filter kept in `next`), and
   projects never appear where the person's `ProjectUser` row is Removed, whatever the filter.
+- An ordinary user's allocations follow ColdFront's list rule: on New or Active projects, through
+  a Manager row or an Active or PendingEULA allocation membership. Callers who see all
+  allocations see every project status. The single allocation follows `Allocation.has_perm`.
 - The system checks: an error when `rest_framework` or `rest_framework.authtoken` isn't
   installed, and when `coldfront.plugins.api` is.
 - Storage areas with a fake VAST client, like `FakeTrueNASClient` in the storage plugin's

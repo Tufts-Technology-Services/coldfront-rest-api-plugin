@@ -14,12 +14,14 @@ version, so it sits outside the version prefixes: reverse("rest_api:token").
 from django.urls import include, path
 
 from rest_api.token_views import RegenerateTokenView, RevokeTokenView, TokenPageView
-from rest_api.views import UserProjectsView
+from rest_api.views import AllocationDetailView, AllocationListView, UserProjectsView
 
 app_name = "rest_api"
 
 v2_routes = [
     path("users/<str:username>/projects/", UserProjectsView.as_view(), name="user-projects"),
+    path("allocations/", AllocationListView.as_view(), name="allocation-list"),
+    path("allocations/<int:pk>/", AllocationDetailView.as_view(), name="allocation-detail"),
 ]
 
 latest_routes = v2_routes
