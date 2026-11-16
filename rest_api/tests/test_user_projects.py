@@ -131,11 +131,62 @@ def test_new_projects_are_listed_as_in_coldfront(api_client, make_project, add_m
     assert [project["status"] for project in response.json()["results"]] == ["New", "New"]
 
 
-def test_archived_projects_are_left_out(api_client, make_project, add_member, make_user, smith):
+def test_archived_projects_are_left_out_by_default(api_client, make_project, add_member, make_user, smith):
     add_member(make_project(make_user("pi01"), title="Member", status="Archived"), smith)
     make_project(smith, title="PI", status="Archived")
 
     assert titles(get_projects(api_client, smith, "smith01")) == []
+
+
+# Filtering by status
+
+
+@pytest.fixture
+def projects_in_each_status(make_project, add_member, make_user, smith):
+    for status in ["New", "Active", "Archived"]:
+        add_member(make_project(make_user(f"pi-{status.lower()}"), title=f"{status} project", status=status), smith)
+
+
+@pytest.mark.parametrize(
+    "statuses, expected",
+    [
+        (["Active"], ["Active project"]),
+        (["New"], ["New project"]),
+        (["Archived"], ["Archived project"]),
+        (["Active", "Archived"], ["Active project", "Archived project"]),
+    ],
+)
+def test_the_status_filter(api_client, smith, projects_in_each_status, statuses, expected):
+    assert titles(get_projects(api_client, smith, "smith01", status=statuses)) == expected
+
+
+def test_archived_projects_a_person_pis(api_client, make_project, smith):
+    make_project(smith, title="Old Lab", status="Archived")
+
+    assert titles(get_projects(api_client, smith, "smith01", status="Archived")) == ["Old Lab"]
+
+
+def test_the_status_filter_doesnt_widen_who_is_listed(api_client, make_project, add_member, make_user, smith):
+    add_member(make_project(make_user("pi01"), title="Removed", status="Archived"), smith, status="Removed")
+    make_project(make_user("jones01"), title="Jones Lab", status="Archived")
+
+    assert titles(get_projects(api_client, smith, "smith01", status="Archived")) == []
+
+
+def test_an_unknown_status_is_a_400(api_client, smith, projects_in_each_status):
+    response = get_projects(api_client, smith, "smith01", status="Retired")
+
+    assert response.status_code == 400
+    assert "status" in response.json()
+
+
+def test_the_next_page_keeps_the_filter(api_client, make_project, smith):
+    for title in ["A", "B"]:
+        make_project(smith, title=title, status="Archived")
+
+    response = get_projects(api_client, smith, "smith01", status="Archived", page_size=1)
+
+    assert "status=Archived" in response.json()["next"]
 
 
 def test_a_removed_member_is_left_out(api_client, make_project, add_member, make_user, smith):

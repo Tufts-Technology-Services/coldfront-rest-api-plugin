@@ -116,7 +116,8 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
 - **New and Active projects, as in ColdFront** (decided 2026-11-16, replacing Active only from
   2026-11-02). ColdFront's project list, and its allocation list for an ordinary user, show
   projects that are New or Active, so the projects endpoint and an ordinary user's allocations
-  do too. Membership is an Active `ProjectUser` row, or being the PI.
+  do too. Membership is an Active `ProjectUser` row, or being the PI. Archived projects, which
+  ColdFront shows on a page of their own, come with `?status=Archived`.
 - **Resource filters match partially** (decided 2026-11-02): case-insensitive `icontains`.
 - **Paginated.** Lists use DRF's `PageNumberPagination`, 100 per page by default and up to
   1000 with `?page_size=`. The allocation list in particular runs to thousands of rows.
@@ -185,9 +186,14 @@ of the API.
 
 ### `GET /api/v2/users/<username>/projects/`
 
-The **New and Active** projects `<username>` is an **Active** member of, plus any New or Active
-project they are PI of, as ColdFront's project list shows them. Projects in any other status
-(Archived, ...) are left out. They are listed in title order.
+The projects `<username>` is an **Active** member of, plus any they are PI of, in title order.
+
+- **Without `?status=`:** New and Active projects, as ColdFront's project list shows them.
+- **With `?status=`:** exactly the statuses named, by name, Archived included, as ColdFront's
+  archived projects page shows them. Repeatable: `?status=Active&status=Archived`. A name that
+  isn't a project status is a 400 naming the valid ones, not an empty list. The filter only
+  narrows: it never lists a project the person isn't a member or PI of.
+- Added 2026-11-16, with Archived projects.
 
 ```json
 {
@@ -633,8 +639,9 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 - A service account's lookups are logged with the username asked about.
 - Each allocation filter, including an allocation with two resources matching once, not twice,
   and a repeated partial filter matching either value.
-- New and Active projects appear and Archived ones don't, and neither do projects where the
-  person's `ProjectUser` row is Removed.
+- New and Active projects appear and Archived ones don't unless `?status=` asks for them
+  (each status alone and together, an unknown one a 400, the filter kept in `next`), and
+  projects never appear where the person's `ProjectUser` row is Removed, whatever the filter.
 - The system checks: an error when `rest_framework` or `rest_framework.authtoken` isn't
   installed, and when `coldfront.plugins.api` is.
 - Storage areas with a fake VAST client, like `FakeTrueNASClient` in the storage plugin's
