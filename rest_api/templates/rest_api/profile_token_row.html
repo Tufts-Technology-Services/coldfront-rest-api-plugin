@@ -1,0 +1,23 @@
+{% comment %}
+A row for the user profile page's table, about the API token of the person viewing their own
+profile. The site's user/user_profile.html includes it inside its profile_contents block:
+{% include "rest_api/profile_token_row.html" %}. It shows nothing on anyone else's profile, and
+only the token's last six characters on your own.
+{% endcomment %}
+{% if viewed_user == request.user %}
+  <tr>
+    <th scope="row">API Token:</th>
+    <td>
+      {% with token=request.user.auth_token %}
+        {% if token %}
+          Ending <code>{{ token.key|slice:"-6:" }}</code>, created {{ token.created|date:"N j, Y" }}
+        {% else %}
+          None
+        {% endif %}
+      {% endwith %}
+      <a class="btn btn-secondary btn-sm ms-2" href="{% url 'rest_api:token' %}">
+        <i class="fas fa-key" aria-hidden="true"></i> Manage
+      </a>
+    </td>
+  </tr>
+{% endif %}
