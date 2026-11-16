@@ -16,6 +16,9 @@ from rest_api.serializers import UserProjectSerializer
 # who looked up whom, for service accounts; see docs/rest-api-plan.md
 lookup_logger = logging.getLogger("rest_api.lookups")
 
+# The project statuses ColdFront's own project and allocation lists show
+LISTED_PROJECT_STATUSES = ["New", "Active"]
+
 
 class PersonLookupMixin:
     """
@@ -40,7 +43,7 @@ class PersonLookupMixin:
 
 
 class UserProjectsView(PersonLookupMixin, ListAPIView):
-    """GET /api/v2/users/<username>/projects/: the Active projects a person is an Active member or PI of."""
+    """GET /api/v2/users/<username>/projects/: the New and Active projects a person is an Active member or PI of."""
 
     permission_classes = [IsAuthenticated]
     pagination_class = ApiPagination
@@ -54,7 +57,7 @@ class UserProjectsView(PersonLookupMixin, ListAPIView):
         if not sees_private_attributes(self.request.user):
             attributes = attributes.filter(proj_attr_type__is_private=False)
         return (
-            Project.objects.filter(status__name="Active")
+            Project.objects.filter(status__name__in=LISTED_PROJECT_STATUSES)
             .filter(Q(pi=person) | Q(pk__in=active_memberships.values("project")))
             .select_related("pi", "status")
             .prefetch_related(

@@ -1,4 +1,4 @@
-"""GET /api/v2/users/<username>/projects/: the Active projects a person is an Active member or PI of."""
+"""GET /api/v2/users/<username>/projects/: the New and Active projects a person is an Active member or PI of."""
 
 import logging
 
@@ -121,10 +121,19 @@ def test_a_pi_who_is_also_a_member_is_listed_once(api_client, make_project, add_
     assert response.json()["results"][0]["membership"] == {"role": "Manager", "status": "Active"}
 
 
-@pytest.mark.parametrize("status", ["New", "Archived"])
-def test_projects_that_arent_active_are_left_out(api_client, make_project, add_member, make_user, smith, status):
-    add_member(make_project(make_user("pi01"), title="Member", status=status), smith)
-    make_project(smith, title="PI", status=status)
+def test_new_projects_are_listed_as_in_coldfront(api_client, make_project, add_member, make_user, smith):
+    add_member(make_project(make_user("pi01"), title="Member", status="New"), smith)
+    make_project(smith, title="PI", status="New")
+
+    response = get_projects(api_client, smith, "smith01")
+
+    assert titles(response) == ["Member", "PI"]
+    assert [project["status"] for project in response.json()["results"]] == ["New", "New"]
+
+
+def test_archived_projects_are_left_out(api_client, make_project, add_member, make_user, smith):
+    add_member(make_project(make_user("pi01"), title="Member", status="Archived"), smith)
+    make_project(smith, title="PI", status="Archived")
 
     assert titles(get_projects(api_client, smith, "smith01")) == []
 

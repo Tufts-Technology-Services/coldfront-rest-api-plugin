@@ -113,9 +113,10 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   anyone's data and seeing private attributes stay separate: only superusers get the second.
 - **A service account can ask about anyone, but only with a dedicated permission, and never
   sees private attributes** (decided 2026-11-02). See [Who can see what](#who-can-see-what).
-- **Only Active projects** (decided 2026-11-02). The projects endpoint lists Active projects
-  only, and the allocations endpoint lists only allocations on Active projects. Membership is
-  an Active `ProjectUser` row, or being the PI.
+- **New and Active projects, as in ColdFront** (decided 2026-11-16, replacing Active only from
+  2026-11-02). ColdFront's project list, and its allocation list for an ordinary user, show
+  projects that are New or Active, so the projects endpoint and an ordinary user's allocations
+  do too. Membership is an Active `ProjectUser` row, or being the PI.
 - **Resource filters match partially** (decided 2026-11-02): case-insensitive `icontains`.
 - **Paginated.** Lists use DRF's `PageNumberPagination`, 100 per page by default and up to
   1000 with `?page_size=`. The allocation list in particular runs to thousands of rows.
@@ -184,9 +185,9 @@ of the API.
 
 ### `GET /api/v2/users/<username>/projects/`
 
-The **Active** projects `<username>` is an **Active** member of, plus any Active project they are
-PI of. Projects in any other status (New, Archived, ...) are left out. They are listed in title
-order.
+The **New and Active** projects `<username>` is an **Active** member of, plus any New or Active
+project they are PI of, as ColdFront's project list shows them. Projects in any other status
+(Archived, ...) are left out. They are listed in title order.
 
 ```json
 {
@@ -228,7 +229,7 @@ Allocations the caller may see (see [Who can see what](#who-can-see-what)), filt
 | `project` | `project_id` | `?project=412` |
 | `username` | an Active `AllocationUser`, or the project's PI | `?username=smith01` |
 
-Only allocations on Active projects are listed. Each filter can be repeated to match any of
+Only allocations on New or Active projects are listed. Each filter can be repeated to match any of
 several values (`?resource=A&resource=B`). For the partial filters, that is an OR of
 `icontains` lookups, so they are method filters, not django-filter's `BaseInFilter`. Partial
 matching means `?resource=Storage` matches every resource with "Storage" in its name; callers
@@ -632,8 +633,8 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 - A service account's lookups are logged with the username asked about.
 - Each allocation filter, including an allocation with two resources matching once, not twice,
   and a repeated partial filter matching either value.
-- Projects and allocations on New or Archived projects never appear, and neither do projects
-  where the person's `ProjectUser` row is Removed.
+- New and Active projects appear and Archived ones don't, and neither do projects where the
+  person's `ProjectUser` row is Removed.
 - The system checks: an error when `rest_framework` or `rest_framework.authtoken` isn't
   installed, and when `coldfront.plugins.api` is.
 - Storage areas with a fake VAST client, like `FakeTrueNASClient` in the storage plugin's
@@ -662,7 +663,8 @@ None. Answered 2026-11-02 (the first three here on 2026-11-16) and written into
   `can_view_all_projects` or `can_view_all_allocations` for that kind of data, plus service
   accounts with `view_any_person`. Staff alone don't.
 - A service account may ask about anyone, only with `rest_api.view_any_person`.
-- Only Active projects; membership is an Active `ProjectUser` row or being the PI.
+- New and Active projects, as in ColdFront; membership is an Active `ProjectUser` row or being
+  the PI.
 - Resource filters match partially (`icontains`).
 - Home folders: option A, the person's user quota inside `/homedir`, looked up per person with
   `/userquotas/?path=/homedir&entity_identifier=`, UIDs resolved with `getent`.

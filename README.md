@@ -12,9 +12,9 @@ design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.m
 
 ## Endpoints
 
-- `GET /api/v2/users/<username>/projects/`: the Active projects a person is an Active member or
-  PI of, with their membership and project attributes. Paginated: 100 per page, up to 1000 with
-  `?page_size=`.
+- `GET /api/v2/users/<username>/projects/`: the New and Active projects a person is an Active
+  member or PI of, with their membership and project attributes. Paginated: 100 per page, up to
+  1000 with `?page_size=`.
 
 Every endpoint is also served at `/api/latest/...` and at `/api/...` with no version, both of
 which follow the newest version: today, v2. A system that mustn't break when a v3 arrives should
