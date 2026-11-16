@@ -1,9 +1,8 @@
-"""GET /api/v2/users/<username>/projects/: the Active projects a person is an Active member or PI of."""
+"""GET /api/v2/users/<username>/projects/: the New and Active projects a person is an Active member or PI of."""
 
 import logging
 
 import pytest
-from django.contrib.auth.models import Permission, User
 from django.urls import reverse
 
 
@@ -122,12 +121,72 @@ def test_a_pi_who_is_also_a_member_is_listed_once(api_client, make_project, add_
     assert response.json()["results"][0]["membership"] == {"role": "Manager", "status": "Active"}
 
 
-@pytest.mark.parametrize("status", ["New", "Archived"])
-def test_projects_that_arent_active_are_left_out(api_client, make_project, add_member, make_user, smith, status):
-    add_member(make_project(make_user("pi01"), title="Member", status=status), smith)
-    make_project(smith, title="PI", status=status)
+def test_new_projects_are_listed_as_in_coldfront(api_client, make_project, add_member, make_user, smith):
+    add_member(make_project(make_user("pi01"), title="Member", status="New"), smith)
+    make_project(smith, title="PI", status="New")
+
+    response = get_projects(api_client, smith, "smith01")
+
+    assert titles(response) == ["Member", "PI"]
+    assert [project["status"] for project in response.json()["results"]] == ["New", "New"]
+
+
+def test_archived_projects_are_left_out_by_default(api_client, make_project, add_member, make_user, smith):
+    add_member(make_project(make_user("pi01"), title="Member", status="Archived"), smith)
+    make_project(smith, title="PI", status="Archived")
 
     assert titles(get_projects(api_client, smith, "smith01")) == []
+
+
+# Filtering by status
+
+
+@pytest.fixture
+def projects_in_each_status(make_project, add_member, make_user, smith):
+    for status in ["New", "Active", "Archived"]:
+        add_member(make_project(make_user(f"pi-{status.lower()}"), title=f"{status} project", status=status), smith)
+
+
+@pytest.mark.parametrize(
+    "statuses, expected",
+    [
+        (["Active"], ["Active project"]),
+        (["New"], ["New project"]),
+        (["Archived"], ["Archived project"]),
+        (["Active", "Archived"], ["Active project", "Archived project"]),
+    ],
+)
+def test_the_status_filter(api_client, smith, projects_in_each_status, statuses, expected):
+    assert titles(get_projects(api_client, smith, "smith01", status=statuses)) == expected
+
+
+def test_archived_projects_a_person_pis(api_client, make_project, smith):
+    make_project(smith, title="Old Lab", status="Archived")
+
+    assert titles(get_projects(api_client, smith, "smith01", status="Archived")) == ["Old Lab"]
+
+
+def test_the_status_filter_doesnt_widen_who_is_listed(api_client, make_project, add_member, make_user, smith):
+    add_member(make_project(make_user("pi01"), title="Removed", status="Archived"), smith, status="Removed")
+    make_project(make_user("jones01"), title="Jones Lab", status="Archived")
+
+    assert titles(get_projects(api_client, smith, "smith01", status="Archived")) == []
+
+
+def test_an_unknown_status_is_a_400(api_client, smith, projects_in_each_status):
+    response = get_projects(api_client, smith, "smith01", status="Retired")
+
+    assert response.status_code == 400
+    assert "status" in response.json()
+
+
+def test_the_next_page_keeps_the_filter(api_client, make_project, smith):
+    for title in ["A", "B"]:
+        make_project(smith, title=title, status="Archived")
+
+    response = get_projects(api_client, smith, "smith01", status="Archived", page_size=1)
+
+    assert "status=Archived" in response.json()["next"]
 
 
 def test_a_removed_member_is_left_out(api_client, make_project, add_member, make_user, smith):
@@ -164,25 +223,26 @@ def test_an_unknown_username_is_the_same_404(api_client, make_user):
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize("flags", [{"staff": True}, {"superuser": True}, {"view_any_person": True}])
-def test_staff_superusers_and_service_accounts_see_anyone(api_client, make_user, smiths_project, flags):
+@pytest.mark.parametrize(
+    "flags",
+    [{"superuser": True}, {"perms": ["project.can_view_all_projects"]}, {"view_any_person": True}],
+)
+def test_superusers_project_viewers_and_service_accounts_see_anyone(api_client, make_user, smiths_project, flags):
     response = get_projects(api_client, make_user("caller", **flags), "smith01")
 
     assert response.status_code == 200
     assert titles(response) == ["Ocean Modelling"]
 
 
-def test_an_unknown_username_is_a_404_for_staff_too(api_client, make_user):
-    response = get_projects(api_client, make_user("caller", staff=True), "nobody99")
+@pytest.mark.parametrize("flags", [{"staff": True}, {"perms": ["allocation.can_view_all_allocations"]}])
+def test_staff_and_allocation_viewers_dont_see_other_peoples_projects(api_client, make_user, smiths_project, flags):
+    response = get_projects(api_client, make_user("caller", **flags), "smith01")
 
     assert response.status_code == 404
 
 
-def test_coldfronts_view_all_permission_doesnt_open_the_api(api_client, make_user, smiths_project):
-    caller = make_user("browser")
-    caller.user_permissions.add(Permission.objects.get(codename="can_view_all_projects"))
-
-    response = get_projects(api_client, User.objects.get(pk=caller.pk), "smith01")
+def test_an_unknown_username_is_a_404_for_superusers_too(api_client, make_user):
+    response = get_projects(api_client, make_user("caller", superuser=True), "nobody99")
 
     assert response.status_code == 404
 
@@ -200,8 +260,8 @@ def attribute_names(response):
     return [attribute["name"] for attribute in response.json()["results"][0]["project_attributes"]]
 
 
-@pytest.mark.parametrize("flags", [{"staff": True}, {"view_any_person": True}])
-def test_staff_and_service_accounts_dont_see_private_attributes(api_client, make_user, attributes, flags):
+@pytest.mark.parametrize("flags", [{"perms": ["project.can_view_all_projects"]}, {"view_any_person": True}])
+def test_project_viewers_and_service_accounts_dont_see_private_attributes(api_client, make_user, attributes, flags):
     response = get_projects(api_client, make_user("caller", **flags), "smith01")
 
     assert attribute_names(response) == ["Group"]
@@ -241,8 +301,8 @@ def test_a_persons_own_lookup_isnt_logged(api_client, smith, smiths_project, cap
     assert [record for record in caplog.records if record.name == "rest_api.lookups"] == []
 
 
-@pytest.mark.parametrize("flags", [{"staff": True}, {"superuser": True}])
-def test_staff_and_superuser_lookups_arent_logged(api_client, make_user, smiths_project, caplog, flags):
+@pytest.mark.parametrize("flags", [{"superuser": True}, {"perms": ["project.can_view_all_projects"]}])
+def test_superuser_and_project_viewer_lookups_arent_logged(api_client, make_user, smiths_project, caplog, flags):
     caplog.set_level(logging.INFO, logger="rest_api.lookups")
 
     get_projects(api_client, make_user("caller", **flags), "smith01")

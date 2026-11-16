@@ -105,26 +105,36 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   superusers see public attributes only, as on the web pages. The response shape is the same
   for every caller: each attribute carries `"is_private"`, so superusers can tell the two apart
   and other callers just never see `true`.
-- **Staff can look up anyone** (decided 2026-11-16), as they could in v1.
-  Seeing anyone's data and seeing private attributes are separate: staff get the first, only
-  superusers get the second.
+- **ColdFront's rules decide who sees what** (decided 2026-11-16). The API never shows more than
+  ColdFront's own pages would. Seeing everyone's projects takes superuser or ColdFront's
+  `project.can_view_all_projects`; everyone's allocations, superuser or
+  `allocation.can_view_all_allocations`. The staff flag alone isn't enough, as in ColdFront.
+  (This replaces a decision earlier the same day that staff could look up anyone.) Seeing
+  anyone's data and seeing private attributes stay separate: only superusers get the second.
 - **A service account can ask about anyone, but only with a dedicated permission, and never
   sees private attributes** (decided 2026-11-02). See [Who can see what](#who-can-see-what).
-- **Only Active projects** (decided 2026-11-02). The projects endpoint lists Active projects
-  only, and the allocations endpoint lists only allocations on Active projects. Membership is
-  an Active `ProjectUser` row, or being the PI.
+- **New and Active projects, as in ColdFront** (decided 2026-11-16, replacing Active only from
+  2026-11-02). ColdFront's project list, and its allocation list for an ordinary user, show
+  projects that are New or Active, so the projects endpoint and an ordinary user's allocations
+  do too. Membership is an Active `ProjectUser` row, or being the PI. Archived projects, which
+  ColdFront shows on a page of their own, come with `?status=Archived`.
 - **Resource filters match partially** (decided 2026-11-02): case-insensitive `icontains`.
 - **Paginated.** Lists use DRF's `PageNumberPagination`, 100 per page by default and up to
   1000 with `?page_size=`. The allocation list in particular runs to thousands of rows.
 
 ## Who can see what
 
-| Caller | Own data | Anyone's data | Private attributes |
-| --- | --- | --- | --- |
-| Any authenticated user | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no |
-| Superusers | yes | yes | yes |
-| Staff who aren't superusers | yes | yes | no |
-| A service account with `rest_api.view_any_person` | yes | yes | no |
+| Caller | Own data | Anyone's projects | Anyone's allocations | Private attributes |
+| --- | --- | --- | --- | --- |
+| Any authenticated user, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no |
+| Superusers | yes | yes | yes | yes |
+| Holders of ColdFront's `project.can_view_all_projects` | yes | yes | no | no |
+| Holders of ColdFront's `allocation.can_view_all_allocations` | yes | no | yes | no |
+| A service account with `rest_api.view_any_person` | yes | yes | yes | no |
+
+"Own data" follows ColdFront's rules too: on the allocations endpoint, an ordinary user sees the
+allocations ColdFront's allocation list would show them (see
+[`/allocations/`](#get-apiv2allocations)).
 
 **The service account permission is the API's own,** not ColdFront's
 `project.can_view_all_projects` / `allocation.can_view_all_allocations`. ColdFront's web
@@ -144,10 +154,12 @@ project and allocation in the UI. `view_any_person` means nothing outside this A
 - **Private attributes stay superuser-only.** `view_any_person` widens *whose* data an account
   can read, not *what*. If a service ever needs private attributes, that is a second permission,
   not a staff or superuser flag on the account.
-- **Every request a service account makes is logged** with the username it asked about, so
-  there is a record of who looked up whom: at INFO, to the `rest_api.lookups` logger, as
-  `<caller> looked up <username>: <path>`. A service account here is a caller with
-  `view_any_person` who is neither staff nor a superuser.
+- **Every request a service account makes is logged** with what it asked about, so there is a
+  record of who looked up whom: at INFO, to the `rest_api.lookups` logger, as
+  `<caller> looked up <username>: <path>`, `<caller> looked up allocations: <path and query>`
+  (the query shows the filters, `?username=` included) and
+  `<caller> looked up allocation <id>: <path>`. A service account here is a caller with
+  `view_any_person` who isn't a superuser.
 
 ## The token page
 
@@ -176,9 +188,14 @@ of the API.
 
 ### `GET /api/v2/users/<username>/projects/`
 
-The **Active** projects `<username>` is an **Active** member of, plus any Active project they are
-PI of. Projects in any other status (New, Archived, ...) are left out. They are listed in title
-order.
+The projects `<username>` is an **Active** member of, plus any they are PI of, in title order.
+
+- **Without `?status=`:** New and Active projects, as ColdFront's project list shows them.
+- **With `?status=`:** exactly the statuses named, by name, Archived included, as ColdFront's
+  archived projects page shows them. Repeatable: `?status=Active&status=Archived`. A name that
+  isn't a project status is a 400 naming the valid ones, not an empty list. The filter only
+  narrows: it never lists a project the person isn't a member or PI of.
+- Added 2026-11-16, with Archived projects.
 
 ```json
 {
@@ -210,7 +227,18 @@ order.
 
 ### `GET /api/v2/allocations/`
 
-Allocations the caller may see (see [Who can see what](#who-can-see-what)), filtered by:
+The allocations ColdFront's allocation list would show the caller (decided 2026-11-16: the API
+uses ColdFront's rules):
+
+- **Callers who can see all allocations** (superusers, holders of
+  `allocation.can_view_all_allocations`, and service accounts with `view_any_person`) see every
+  allocation, as ColdFront's "show all allocations" does, whatever its project's status.
+- **Everyone else** sees allocations on New or Active projects where they have an Active
+  `ProjectUser` row and either that row's role is Manager (so a project's PI and Approvers see
+  all its allocations) or they are an Active or PendingEULA `AllocationUser` of the allocation.
+- **Every allocation status** is listed unless `?status=` narrows it, as in ColdFront.
+
+The list can be filtered by:
 
 | Parameter | Matches | Example |
 | --- | --- | --- |
@@ -220,7 +248,7 @@ Allocations the caller may see (see [Who can see what](#who-can-see-what)), filt
 | `project` | `project_id` | `?project=412` |
 | `username` | an Active `AllocationUser`, or the project's PI | `?username=smith01` |
 
-Only allocations on Active projects are listed. Each filter can be repeated to match any of
+Each filter can be repeated to match any of
 several values (`?resource=A&resource=B`). For the partial filters, that is an OR of
 `icontains` lookups, so they are method filters, not django-filter's `BaseInFilter`. Partial
 matching means `?resource=Storage` matches every resource with "Storage" in its name; callers
@@ -244,6 +272,16 @@ so the filters match an allocation if **any** of its resources match, and the qu
 
 `usage` comes from `AllocationAttributeUsage`, as in ColdFront's serializer, and is `null`
 for attribute types without usage.
+
+### `GET /api/v2/allocations/<id>/`
+
+One allocation, in the same shape as in the list (added 2026-11-16). Who may see it is
+ColdFront's allocation page's rule: superusers, holders of `allocation.can_view_all_allocations`
+and service accounts with `view_any_person`, and anyone else for whom
+`Allocation.has_perm(user, AllocationPermission.USER)` is true: an Active or New `ProjectUser`
+row on its project, and either the PI or Manager role, or an Active, New or PendingEULA
+`AllocationUser` row. Anyone else gets a 404, the same as for an allocation that doesn't exist.
+`/allocations/<id>/usage/` uses the same rule.
 
 ### `GET /api/v2/users/<username>/storage/`
 
@@ -569,7 +607,7 @@ coldfront-rest-api-plugin/
         checks.py        # DRF and authtoken installed, coldfront.plugins.api not
         models.py        # ApiAccess: unmanaged, no table; carries view_any_person
         migrations/      # creates ApiAccess's permission, not a table
-        permissions.py   # can see anyone (staff, superusers, view_any_person) vs. only yourself
+        permissions.py   # who sees everyone's projects or allocations, ColdFront's rules
         serializers.py   # attribute serializers: private ones for superusers only
         filters.py       # AllocationFilter (django-filter FilterSet)
         views.py
@@ -600,7 +638,9 @@ it, along with the usual in-memory SQLite and MD5 hasher.
       `{app: rest_api, urls: api/}` to `tufts_plugin_apps`, and `REST_FRAMEWORK` to the Tufts
       settings, in the same deploy. Adding the apps before the package is installed would stop
       ColdFront starting; the plugin's system checks stop it starting without the settings.
-2. **Allocations endpoint** with its filters.
+2. **Allocations endpoints:** the filtered list and the single allocation, with ColdFront's rules
+   for who sees which. Built 2026-11-16 on the `allocations-endpoint` branch, with the move to
+   ColdFront's permissions and project statuses and the projects endpoint's `?status=`.
 3. **Storage areas:** the `"type"` key in `STORAGE_PLUGIN_CLIENTS`, the vast-api-client user
    quota calls, the storage plugin's user quota lookup and its tests, then the area list and
    area endpoints with `USER_STORAGE_AREAS` and its system check. Home is ready. Scratch is
@@ -615,17 +655,21 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 ## Testing
 
 - DRF's `APIClient` with `force_authenticate`, in `rest_api/tests/test_*.py`.
-- A permission matrix per endpoint: the person themselves, another user (404), staff who
-  aren't superusers, superusers, and a service account with and without `view_any_person`.
-  Also a user holding ColdFront's `can_view_all_*` permissions but not ours, who still gets a
-  404 for someone else.
+- A permission matrix per endpoint: the person themselves, another user (404), staff without a
+  permission (404), superusers, holders of the matching ColdFront `can_view_all_*` permission
+  (and of the other one, who get a 404), and a service account with and without
+  `view_any_person`.
 - Private attributes appear for superusers and for nobody else: not staff who aren't
   superusers, not the person themselves, not a service account.
 - A service account's lookups are logged with the username asked about.
 - Each allocation filter, including an allocation with two resources matching once, not twice,
   and a repeated partial filter matching either value.
-- Projects and allocations on New or Archived projects never appear, and neither do projects
-  where the person's `ProjectUser` row is Removed.
+- New and Active projects appear and Archived ones don't unless `?status=` asks for them
+  (each status alone and together, an unknown one a 400, the filter kept in `next`), and
+  projects never appear where the person's `ProjectUser` row is Removed, whatever the filter.
+- An ordinary user's allocations follow ColdFront's list rule: on New or Active projects, through
+  a Manager row or an Active or PendingEULA allocation membership. Callers who see all
+  allocations see every project status. The single allocation follows `Allocation.has_perm`.
 - The system checks: an error when `rest_framework` or `rest_framework.authtoken` isn't
   installed, and when `coldfront.plugins.api` is.
 - Storage areas with a fake VAST client, like `FakeTrueNASClient` in the storage plugin's
@@ -650,9 +694,12 @@ None. Answered 2026-11-02 (the first three here on 2026-11-16) and written into
   at Tufts uses v1.
 - Superusers see private attributes; nobody else does, staff who aren't superusers and service
   accounts included. This matches ColdFront's web pages.
-- Staff can look up anyone's projects, allocations and storage, as they could in v1.
+- Who sees everyone follows ColdFront: superusers and holders of ColdFront's
+  `can_view_all_projects` or `can_view_all_allocations` for that kind of data, plus service
+  accounts with `view_any_person`. Staff alone don't.
 - A service account may ask about anyone, only with `rest_api.view_any_person`.
-- Only Active projects; membership is an Active `ProjectUser` row or being the PI.
+- New and Active projects, as in ColdFront; membership is an Active `ProjectUser` row or being
+  the PI.
 - Resource filters match partially (`icontains`).
 - Home folders: option A, the person's user quota inside `/homedir`, looked up per person with
   `/userquotas/?path=/homedir&entity_identifier=`, UIDs resolved with `getent`.

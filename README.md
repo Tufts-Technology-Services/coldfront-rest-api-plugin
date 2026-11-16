@@ -7,21 +7,30 @@ of a person's home and scratch, and live usage for storage allocations.
 It replaces ColdFront's own API plugin (`PLUGIN_API`), which has no filters or pagination and
 returns private attributes to anyone who can see the project.
 
-**Status:** the projects endpoint is built; allocations and storage are to come. The
+**Status:** the projects and allocations endpoints are built; storage is to come. The
 design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.md).
 
 ## Endpoints
 
-- `GET /api/v2/users/<username>/projects/`: the Active projects a person is an Active member or
-  PI of, with their membership and project attributes. Paginated: 100 per page, up to 1000 with
-  `?page_size=`.
+- `GET /api/v2/users/<username>/projects/`: the projects a person is an Active member or PI of,
+  with their membership and project attributes. New and Active ones, as ColdFront's project list
+  shows them, unless `?status=` names others (`?status=Archived`, repeatable). Paginated: 100 per
+  page, up to 1000 with `?page_size=`.
+- `GET /api/v2/allocations/`: the allocations ColdFront's allocation list would show the caller,
+  with their project, status, resources, dates and attributes (with usage). Filters, each
+  repeatable: `resource_type` and `resource` (case-insensitive, partial), `status`, `project`
+  (an id) and `username` (an Active allocation user or the project's PI). Paginated as above.
+- `GET /api/v2/allocations/<id>/`: one allocation, for anyone ColdFront's allocation page would
+  show it to; a 404 for anyone else.
 
 Every endpoint is also served at `/api/latest/...` and at `/api/...` with no version, both of
 which follow the newest version: today, v2. A system that mustn't break when a v3 arrives should
 call `/api/v2/`.
 
-Anyone can ask about themselves. Staff, superusers and accounts with the
-`rest_api.view_any_person` permission can ask about anyone; for anyone else, another person's
+Who sees what follows ColdFront's own rules. Anyone can ask about themselves. Superusers can ask
+about anyone, as can holders of ColdFront's `project.can_view_all_projects` (for projects) or
+`allocation.can_view_all_allocations` (for allocations), and service accounts with the API's
+`rest_api.view_any_person`. The staff flag alone isn't enough. For anyone else, another person's
 username is a 404. Only superusers see private attributes.
 
 ### Your own token
