@@ -323,8 +323,8 @@ That person's quota and live usage in one area. For home (`/homedir`, on the hpc
 }
 ```
 
-Scratch (`/scratch`, added 2026-11-02) answers in the same shape, once its VAST quota is checked;
-see [Scratch](#scratch).
+Scratch (`/scratch`, added 2026-11-02) answers in the same shape; its VAST quota was checked on
+2026-11-16 (see [Scratch](#scratch)).
 
 **One area per request** (decided 2026-11-16). This replaces the 2026-11-02 plan of one
 response holding every area and every storage allocation the person belongs to. Areas and
@@ -404,7 +404,8 @@ paginated (`count`, `next`, `previous`, `results`). Each entry has:
 - **`soft_limit`, `hard_limit`:** the limits in force for that person, the 30 GB default
   included. Either can be `null` (`ymalon01`: 200 GB soft, no hard limit).
 - **`used_capacity`, `used_inodes`, `state`:** the person's usage, for default and override
-  quotas alike.
+  quotas alike. `used_effective_capacity` is `null` on user quota entries (checked 2026-11-16), so
+  `used_capacity` is the usage the area endpoint reports.
 - **`entity`:** who the entry is for. `is_group` says user or group. `identifier_type` is
   `"username"` (`identifier` is then the UTLN) or `"uid"` (`identifier` is a UID and `name` is
   empty, presumably because VAST couldn't resolve it). Groups use `"groupname"` or `"gid"`.
@@ -432,10 +433,24 @@ What that means for the endpoint:
 - **No percentages from VAST.** Its `percent_capacity` is null whenever `hard_limit` is, so the
   endpoint returns the raw numbers and leaves the arithmetic to callers.
 
-**One person is one small call** (confirmed 2026-11-02). `/userquotas/` filters server-side on
-entry fields: `?path=/homedir` cut 16,548 entries to 10,634, and
-`?path=/homedir&entity_identifier=tphimm01` returned two, the `tphimm01` **user** (200 GB
-override, 58 GB used) and the `tphimm01` **group**. Users and groups share names, so the
+**One person is one small call** (confirmed 2026-11-02, the filter's name corrected 2026-11-16).
+`/userquotas/` filters server-side on entry fields: `?path=/homedir` cut 16,548 entries to 10,634,
+and `?path=/homedir&entity__identifier=tphimm01` returned two, the `tphimm01` **user** (200 GB
+override, 58 GB used) and the `tphimm01` **group**.
+
+- **The filter is `entity__identifier`,** with two underscores (a Django lookup on the entry's
+  `entity`). This plan first recorded it as `entity_identifier`, and vast-api-client was built
+  that way. VAST ignores a filter it doesn't know and answers with every entry, so the mistake
+  showed only on 2026-11-16, when a check against the hpc VMS got all 10,685 `/homedir` entries
+  back. Of the names tried, only `entity__identifier` filters, under API versions `v7` and
+  `latest` alike. Because a misspelt filter fails silently, the storage plugin's strict match
+  below stays required, not a precaution.
+- **Paging works as the client expects** (checked 2026-11-16): VAST honours `page_size`, and with
+  `page_size=1` the client followed VAST's next link to get a user's two entries.
+- **The UID fallback works** (checked 2026-11-16): `entity__identifier=1069` on `/homedir`
+  returned the one entry VAST records by that UID (`identifier_type` `uid`, 30 GB default, 3.4 GB
+  used). A username matches only entries recorded by username, and a UID only those recorded by
+  UID, so the two lookups don't overlap. Users and groups share names, so the
 `is_group: false` match above is required, not a precaution. The storage plugin makes that call
 per person, then with the UID if the username finds no user entry, and caches the answer for a
 few minutes. No scheduled task or bulk copy is needed.
@@ -462,24 +477,22 @@ Then:
 - **Each area's `path` is its directory quota** (`/homedir`, `/scratch`), the quota the user quota
   sits in, with `"scope": "user"`, so a caller doesn't read it as the size of one folder.
 - **Everything above applies per area:** each area's `system_id` and default limits come from
-  its own `GET /quotas/{id}`, and a request is one `/userquotas/?path=<area>&entity_identifier=`
+  its own `GET /quotas/{id}`, and a request is one `/userquotas/?path=<area>&entity__identifier=`
   call (two if it falls back to the UID).
 
 ### Scratch
 
-Added 2026-11-02. The lookup is assumed to work as it does for `/homedir`; none of this is checked
-yet:
+Added 2026-11-02; checked on the hpc VMS on 2026-11-16 with vast-api-client's `get_quota` and
+`get_user_quotas`. It works as home does:
 
-- **Is there a VAST quota at path `/scratch`,** and is that the path VAST uses (home is
-  `/homedir` on VAST but `/cluster/home` on the cluster)?
-- **Does it have user quotas** (`is_user_quota: true`, a `default_user_quota`)? If scratch has a
-  directory quota but no user quotas, there is no per-person limit: the area can report the
-  person's usage only if `/userquotas/` still lists them, and `null` limits otherwise.
-- **Does `/userquotas/?path=/scratch&entity_identifier=<UTLN>` return that person's entry,** as it
-  does for `/homedir`?
+- **There is a directory quota at `/scratch`** on VAST: id 680, `system_id` 657.
+- **It has user quotas** (`is_user_quota: true`), with a default of 100 GB soft and 100 GB hard.
+- **`/userquotas/?path=/scratch&entity__identifier=<UTLN>` returns that person's user entry,**
+  as for `/homedir` (`quota_system_id` 657). `cbarne02` had a user entry and no group entry
+  there, where `/homedir` has both.
 
-Checking them takes the same two calls as for home: `GET /quotas/?path=/scratch` and the
-filtered `/userquotas/` query.
+So scratch needs no code of its own: adding `"scratch": {"client": "hpc", "path": "/scratch"}` to
+`USER_STORAGE_AREAS` is enough.
 
 
 ### `GET /api/v2/allocations/<id>/usage/`
@@ -643,9 +656,10 @@ it, along with the usual in-memory SQLite and MD5 hasher.
    ColdFront's permissions and project statuses and the projects endpoint's `?status=`.
 3. **Storage areas:** the `"type"` key in `STORAGE_PLUGIN_CLIENTS`, the vast-api-client user
    quota calls, the storage plugin's user quota lookup and its tests, then the area list and
-   area endpoints with `USER_STORAGE_AREAS` and its system check. Home is ready. Scratch is
-   added to the settings once its VAST quota is checked ([Scratch](#scratch)), with no code
-   change if it works like home.
+   area endpoints with `USER_STORAGE_AREAS` and its system check. Home and scratch are both
+   ready ([Scratch](#scratch), checked 2026-11-16). The vast-api-client calls are built and
+   were tried against the hpc VMS on 2026-11-16 (its `user-quotas` branch), by username, by UID
+   and across pages.
 4. **Live allocation usage:** the storage plugin's directory quota lookup, then
    `/allocations/<id>/usage/`. Needs the allocations endpoint (phase 2) and the VAST usage
    field settled (see "Still to check" under
@@ -702,9 +716,9 @@ None. Answered 2026-11-02 (the first three here on 2026-11-16) and written into
   the PI.
 - Resource filters match partially (`icontains`).
 - Home folders: option A, the person's user quota inside `/homedir`, looked up per person with
-  `/userquotas/?path=/homedir&entity_identifier=`, UIDs resolved with `getent`.
-- Scratch (`/scratch`) is reported the same way, as its own area. Its VAST quota is not
-  checked yet; see [Scratch](#scratch).
+  `/userquotas/?path=/homedir&entity__identifier=`, UIDs resolved with `getent`.
+- Scratch (`/scratch`) is reported the same way, as its own area. Its VAST quota was checked on
+  2026-11-16; see [Scratch](#scratch).
 - Storage is one request per area (`users/<username>/storage/<area>/`) and per allocation
   (`allocations/<id>/usage/`), not one response for everything (2026-11-16): each request asks
   one storage system. Allocations are live from VAST, stored values for TrueNAS.
