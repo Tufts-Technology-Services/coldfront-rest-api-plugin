@@ -58,8 +58,9 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   the default filter backend. Pagination is set per view (see [Decisions](#decisions)).
 - **`rest_framework.authtoken` stays installed,** so its table and any tokens already issued
   survive.
-- **v1's `POST /api/regenerate-token/` goes away.** Service accounts get their tokens from an admin
-  anyway. If ordinary users ever need their own tokens, the plugin adds a small endpoint.
+- **v1's `POST /api/regenerate-token/` goes away,** and the token section v1 added to the user
+  profile with it. The plugin has its own token page in their place; see
+  [The token page](#the-token-page).
 - **v1's staff-only endpoints** (`users`, `allocation-requests`,
   `allocation-change-requests`) go with it. Nobody uses them.
 
@@ -138,7 +139,8 @@ project and allocation in the UI. `view_any_person` means nothing outside this A
 - **A service account is an ordinary Django user** with that permission, an unusable password
   (so it can't log in to the web UI, only use its token) and `is_staff` off.
 - **Its token is issued by an admin,** with DRF's `manage.py drf_create_token <username>` or in
-  the admin's Tokens page. ColdFront's own token page only serves the logged-in user.
+  the admin's Tokens page. The plugin's token page only serves the signed-in person, and a
+  service account can't sign in.
 - **Private attributes stay superuser-only.** `view_any_person` widens *whose* data an account
   can read, not *what*. If a service ever needs private attributes, that is a second permission,
   not a staff or superuser flag on the account.
@@ -146,6 +148,29 @@ project and allocation in the UI. `view_any_person` means nothing outside this A
   there is a record of who looked up whom: at INFO, to the `rest_api.lookups` logger, as
   `<caller> looked up <username>: <path>`. A service account here is a caller with
   `view_any_person` who is neither staff nor a superuser.
+
+## The token page
+
+Added 2026-11-16. v1 had a token section on the user profile page; the plugin replaces it with a
+page of its own at `/api/token/`, outside the version prefixes since it is a web page, not part
+of the API.
+
+- **Anyone signed in can make a token for themselves** (decided 2026-11-16), as in v1. A
+  person's token reads only what they can see signed in, so it is no wider than their session.
+  Service account tokens still come from an admin.
+- **The full token is shown once** (decided 2026-11-16), on the page right after it is created or
+  regenerated; after that, only its last six characters and its date. A lost token is replaced by
+  regenerating it. v1 put the full token in the profile page on every visit, so a superuser using
+  View as could read it. The new token waits in the session, not in a flash message, which Django
+  may keep in a cookie.
+- **Regenerate and revoke** are POSTs with CSRF, each confirmed in the browser. Either one stops
+  the old token working at once.
+- **Logged** at INFO to `rest_api.tokens`: `<username> created an API token`, `... replaced their
+  API token ending <last six>`, `... revoked their API token ending <last six>`.
+- **The profile page links to it** (decided 2026-11-16): a row with the token's last six
+  characters, or None, and a Manage button. The plugin provides the row,
+  `rest_api/profile_token_row.html`. The Tufts branding replaces `user/user_profile.html`, so it
+  includes the row in its `profile_contents` block; the row shows only on your own profile.
 
 ## Endpoints
 
@@ -548,7 +573,9 @@ coldfront-rest-api-plugin/
         serializers.py   # attribute serializers: private ones for superusers only
         filters.py       # AllocationFilter (django-filter FilterSet)
         views.py
-        urls.py          # mounted at api/ by coldfront-ansible; routes under v2/
+        token_views.py   # the token page: create, regenerate, revoke your own token
+        templates/rest_api/  # the token page, and the row the profile page includes
+        urls.py          # mounted at api/ by coldfront-ansible; routes under v2/, and token/
         tests/
             settings.py  # coldfront's settings, plus DRF, authtoken and rest_api
 ```

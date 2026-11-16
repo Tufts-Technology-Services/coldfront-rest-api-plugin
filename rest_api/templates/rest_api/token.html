@@ -1,0 +1,95 @@
+{% extends "common/base.html" %}
+
+{% block title %}API Token{% endblock %}
+
+{% block content %}
+<h2>API Token</h2>
+<hr>
+
+{% if new_key %}
+  <div class="alert alert-success" role="alert">
+    <p class="mb-2">
+      <i class="fas fa-check" aria-hidden="true"></i>
+      Here is your new API token. Copy it now: it won't be shown again.
+    </p>
+    <div class="d-flex align-items-center gap-2">
+      <code id="new-api-token" class="fs-6 user-select-all">{{ new_key }}</code>
+      <button type="button" class="btn btn-secondary btn-sm" id="copy-api-token">
+        <i class="far fa-copy" aria-hidden="true"></i> Copy
+      </button>
+    </div>
+  </div>
+{% endif %}
+
+<div class="card mb-3">
+  <div class="card-header">
+    <i class="fas fa-key" aria-hidden="true"></i> Your token
+  </div>
+  <div class="card-body">
+    {% if token %}
+      <p>
+        You have an API token ending <code>{{ key_ending }}</code>, created
+        {{ token.created|date:"N j, Y, P" }}.
+      </p>
+      <p class="text-muted small">
+        Regenerating replaces it with a new one, and revoking deletes it. Either way, anything
+        still using the old token stops working at once.
+      </p>
+      <div class="d-flex gap-2">
+        <form method="post" action="{% url 'rest_api:token-regenerate' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary"
+                  onclick="return confirm('Replace your API token? Anything using the old one will stop working.');">
+            <i class="fas fa-sync-alt" aria-hidden="true"></i> Regenerate token
+          </button>
+        </form>
+        <form method="post" action="{% url 'rest_api:token-revoke' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-danger"
+                  onclick="return confirm('Revoke your API token? Anything using it will stop working.');">
+            <i class="fas fa-trash-alt" aria-hidden="true"></i> Revoke token
+          </button>
+        </form>
+      </div>
+    {% else %}
+      <p>You don't have an API token.</p>
+      <form method="post" action="{% url 'rest_api:token-regenerate' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">
+          <i class="fas fa-plus" aria-hidden="true"></i> Create token
+        </button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <i class="fas fa-terminal" aria-hidden="true"></i> Using it
+  </div>
+  <div class="card-body">
+    <p>
+      Send the token in an <code>Authorization</code> header. It reads the same information about
+      you that you can see when signed in, such as your projects:
+    </p>
+    <pre class="bg-light p-2 border rounded"><code>curl -H "Authorization: Token <var>your-token</var>" {{ example_url }}</code></pre>
+    <p class="mb-0 text-muted small">Keep it secret, as you would a password.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block javascript %}
+{% if new_key %}
+<script>
+  document.getElementById("copy-api-token").addEventListener("click", async function () {
+    const button = this;
+    try {
+      await navigator.clipboard.writeText(document.getElementById("new-api-token").textContent);
+      button.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i> Copied';
+    } catch (error) {
+      button.textContent = "Select the token and copy it";
+    }
+  });
+</script>
+{% endif %}
+{% endblock %}

@@ -24,6 +24,20 @@ Anyone can ask about themselves. Staff, superusers and accounts with the
 `rest_api.view_any_person` permission can ask about anyone; for anyone else, another person's
 username is a 404. Only superusers see private attributes.
 
+### Your own token
+
+Anyone signed in to ColdFront can make a token for themselves at `/api/token/`. The full token is
+shown once, right after it's made; after that the page shows only its last six characters, with
+buttons to regenerate or revoke it. Making, replacing and revoking a token are logged at INFO to
+the `rest_api.tokens` logger. To link to it from the user profile page, the site's
+`user/user_profile.html` includes the plugin's row inside its `profile_contents` block:
+
+```django
+{% include "rest_api/profile_token_row.html" %}
+```
+
+The row appears only on your own profile.
+
 ### Service accounts
 
 A system calling the API gets an ordinary user, with no staff flag and an unusable password, that
@@ -69,7 +83,8 @@ REST_FRAMEWORK = {
 ```
 
 and mounts `rest_api.urls` at `api/`. The endpoints are under `/api/v2/` (ColdFront's built-in
-API, which used to be at `/api/`, counts as v1), `/api/latest/` and `/api/`.
+API, which used to be at `/api/`, counts as v1), `/api/latest/` and `/api/`, and the token page
+is at `/api/token/`.
 
 ## Development
 
