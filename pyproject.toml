@@ -26,6 +26,10 @@ dependencies = [
     # ColdFront installs both, but only installs their apps with PLUGIN_API, which this plugin replaces
     "djangorestframework>=3.16.0",
     "django-filter>=25.1",
+    # the storage endpoints: user quotas on VAST, and get_uid and ttl_cache. Not the storage plugin:
+    # plugins don't import each other, so this reads its client settings (STORAGE_PLUGIN_CLIENTS) instead
+    "vast-api-client",
+    "coldfront-utils",
 ]
 
 [project.urls]
@@ -72,3 +76,7 @@ section-order = ["future", "standard-library", "third-party", "coldfront-main", 
 [tool.ruff.format]
 indent-style = "space"
 docstring-code-format = true
+
+[tool.uv.sources]
+vast-api-client = { git = "https://github.com/Tufts-Technology-Services/vast-api-client.git" }
+coldfront-utils = { git = "https://github.com/Tufts-Technology-Services/coldfront-utils.git" }
