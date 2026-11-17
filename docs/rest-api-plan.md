@@ -223,9 +223,19 @@ otherwise be a `coldfront_utils` release, moving the library every plugin shares
   `ProjectExtension` and `AllocationExtension`. A subclass sets `name` (its URL segment:
   lowercase letters, digits and hyphens), a one-line `description` and a `version` (see
   [Versioning](#versioning)), and implements `allows(target, caller)`,
-  `summary(target, caller)`, and `item(target, key, caller)` if it has items. `target` is the
-  person (a `User`), project or allocation; `caller` is who's asking. `summary` and `item` return
-  data that can be rendered as JSON.
+  `summary(target, caller, params)`, and `item(target, key, caller, params)` if it has items.
+  `target` is the person (a `User`), project or allocation; `caller` is who's asking, the
+  authenticated `request.user`. `summary` and `item` return data that can be rendered as JSON.
+  Extensions get no request: what they need from it is passed in.
+- **Query parameters** (decided 2026-11-17) reach `summary` and `item` as `params`,
+  `{name: [value, ...]}`, a list since a parameter can be repeated. An extension ignores those it
+  doesn't use, and raises `ExtensionBadRequest` for a value it can't use. `allows` doesn't get them:
+  who may see something doesn't depend on how it's filtered. Registration refuses a `summary` or
+  `item` that doesn't take `params`, and the API passes it by keyword.
+- **Items by key, not URL** (decided 2026-11-17). An item's URL is its summary's URL plus
+  `<key>/`, so a summary lists its items' keys and the caller builds their URLs from the one it
+  called. An extension never needs the host or the prefix (`v2`, `latest`, none) the caller used,
+  which is why it needs no request.
 - **`allows(target, caller)` decides who sees the extension's content** (decided 2026-11-17). It
   has no default: an extension that doesn't implement it is closed to everyone. The plugin
   defines whatever permissions it needs as ordinary Django permissions on one of its own models
@@ -234,9 +244,10 @@ otherwise be a `coldfront_utils` release, moving the library every plugin shares
   `can_view_project(caller, project)` and `can_view_allocation(caller, allocation)`, the rules
   ColdFront's project and allocation pages use. An allocation extension that anyone who can see
   the allocation may see is `return can_view_allocation(caller, target)`.
-- **Two exceptions** an extension raises instead of knowing about HTTP: `ExtensionNotFound`
-  (404: no such item, or not for this caller) and `ExtensionUnavailable` (503, with a message
-  safe to show callers; the details go in the plugin's own log).
+- **Three exceptions** an extension raises instead of knowing about HTTP: `ExtensionNotFound`
+  (404: no such item, or not for this caller), `ExtensionBadRequest` (400, with a message saying
+  what's wrong with the parameters) and `ExtensionUnavailable` (503, with a message safe to show
+  callers; the details go in the plugin's own log).
 - **`register_api_extension(cls)`,** which refuses a malformed name, a class that isn't exactly
   one of the three kinds, and a second class of the same kind with the same name, raising
   `ImproperlyConfigured` at startup, as `register_request_section` does. Registering the same
@@ -268,8 +279,8 @@ otherwise be a `coldfront_utils` release, moving the library every plugin shares
   account. A service account that should read a plugin's content is granted that plugin's
   permission, alongside `view_any_person` for the API's own endpoints.
 - **Logging** of service accounts' lookups, as for the API's own endpoints.
-- **Errors:** `ExtensionNotFound` is a 404, `ExtensionUnavailable` a 503 with its message, and
-  anything else a 500, logged.
+- **Errors:** `ExtensionNotFound` is a 404, `ExtensionBadRequest` a 400 and `ExtensionUnavailable`
+  a 503, each of the last two with its message, and anything else a 500, logged.
 - **Discovery:** `GET /api/v2/extensions/` lists what's registered, by kind, with each name,
   description, version and whether it's deprecated, so a caller can see what a deployment serves.
 
@@ -431,7 +442,7 @@ Served by the storage plugin's `storage` person extension (see
 
 The storage areas that belong to a person rather than to a project: their home folder and
 scratch. These aren't ColdFront allocations, so this is the only place the API reports them. The
-list names each area and the URL to ask about it, and calls no storage system:
+list names each area by its key, and calls no storage system:
 
 ```json
 {
@@ -439,15 +450,15 @@ list names each area and the URL to ask about it, and calls no storage system:
   "version": 1,
   "username": "smith01",
   "areas": [
-    {"name": "home", "url": "https://rcrm.it.tufts.edu/api/v2/users/smith01/storage/home/"},
-    {"name": "scratch", "url": "https://rcrm.it.tufts.edu/api/v2/users/smith01/storage/scratch/"}
+    {"key": "home"},
+    {"key": "scratch"}
   ]
 }
 ```
 
 The areas come from the settings (below), in the order they are listed there. The list isn't
-paginated, since there are only a few. Each `url` stays on the prefix the caller used (`v2`,
-`latest` or none).
+paginated, since there are only a few. A caller asks about an area at the list's URL plus its key
+(`/api/v2/users/smith01/storage/home/`), which keeps it on the prefix it used.
 
 ### `GET /api/v2/users/<username>/storage/<area>/`
 
@@ -816,7 +827,8 @@ it, along with the usual in-memory SQLite and MD5 hasher.
    ColdFront's permissions and project statuses and the projects endpoint's `?status=`.
 3. **Plugin extensions, then storage areas:** the vast-api-client user quota calls (built and
    tried against the hpc VMS on 2026-11-16, by username, by UID and across pages; merged). Then
-   [plugin extensions](#plugin-extensions) in coldfront-utils and the API plugin, and the
+   [plugin extensions](#plugin-extensions) in coldfront-utils (built 2026-11-17 on its
+   `api-extensions` branch) and the API plugin (built 2026-11-17 on `extension-routes`), and the
    storage plugin's `storage` extension, which takes over the lookup first built in the API
    plugin on the `storage-areas` branch. Home and scratch are both ready
    ([Scratch](#scratch)). To deploy: coldfront-utils, the storage plugin and the API plugin

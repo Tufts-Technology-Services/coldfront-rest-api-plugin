@@ -235,6 +235,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "coldfront" },
+    { name = "coldfront-utils" },
     { name = "django-filter" },
     { name = "djangorestframework" },
 ]
@@ -251,6 +252,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "coldfront", specifier = ">=1.1.8,<2" },
+    { name = "coldfront-utils", git = "https://github.com/Tufts-Technology-Services/coldfront-utils.git?rev=v0.4.0" },
     { name = "django-filter", specifier = ">=25.1" },
     { name = "djangorestframework", specifier = ">=3.16.0" },
 ]
@@ -262,6 +264,14 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pytest-django", specifier = ">=4.11.1" },
     { name = "ruff", specifier = ">=0.11.4" },
+]
+
+[[package]]
+name = "coldfront-utils"
+version = "0.4.0"
+source = { git = "https://github.com/Tufts-Technology-Services/coldfront-utils.git?rev=v0.4.0#e0a7e62b0104c4b1093f0e1a29ac93aff97421bd" }
+dependencies = [
+    { name = "coldfront" },
 ]
 
 [[package]]
