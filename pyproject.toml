@@ -8,7 +8,7 @@ authors = [
     { name = "ColdFront Authors" },
 ]
 readme = "README.md"
-# 3.11: the storage quota endpoint will depend on coldfront-storage-plugin, whose floor is 3.11
+# 3.11: django-filter 26 needs it
 requires-python = ">=3.11"
 # AGPL, as ColdFront is: parts are copied or adapted from ColdFront's own code
 license = "AGPL-3.0-or-later"
@@ -26,6 +26,8 @@ dependencies = [
     # ColdFront installs both, but only installs their apps with PLUGIN_API, which this plugin replaces
     "djangorestframework>=3.16.0",
     "django-filter>=25.1",
+    # api_extensions: plugins register what they serve here, so the API never imports them.
+    "coldfront-utils@git+https://github.com/Tufts-Technology-Services/coldfront-utils.git@v0.4.0",
 ]
 
 [project.urls]

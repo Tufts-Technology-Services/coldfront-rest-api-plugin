@@ -3,8 +3,10 @@ System checks for the apps the API needs, so a deployment that's missing them st
 `manage.py check` and `migrate` instead of failing requests.
 """
 
+from coldfront_utils.api_extensions import registered_extensions
 from django.apps import apps
 from django.core import checks
+from django.urls import Resolver404, resolve
 
 # ColdFront installs these only with PLUGIN_API, which is off where this plugin runs
 REQUIRED_APPS = ["rest_framework", "rest_framework.authtoken", "django_filters"]
@@ -33,4 +35,42 @@ def check_installed_apps(app_configs, **kwargs):
                 id="rest_api.E002",
             )
         )
+    return errors
+
+
+# each kind's extension route: as an error shows it, and as a path to resolve with sample values
+EXTENSION_ROUTES = {
+    "person": ("users/<username>/{name}/", "/v2/users/someone/{name}/"),
+    "project": ("projects/<id>/{name}/", "/v2/projects/1/{name}/"),
+    "allocation": ("allocations/<id>/{name}/", "/v2/allocations/1/{name}/"),
+}
+
+
+@checks.register()
+def check_extension_names(app_configs, **kwargs):
+    """E003 for each registered extension whose URL one of the API's own routes serves instead, such
+    as a person extension named "projects". Found by resolving the extension's URL, so it covers
+    every route the API has, not a list kept by hand."""
+    from rest_api.extension_views import ExtensionView
+
+    errors = []
+    for kind, extension_classes in registered_extensions().items():
+        shown, sample = EXTENSION_ROUTES[kind]
+        for extension_class in extension_classes:
+            name = extension_class.name
+            try:
+                view_class = getattr(
+                    resolve(sample.format(name=name), urlconf="rest_api.urls").func, "view_class", None
+                )
+            except Resolver404:
+                view_class = None
+            if not (isinstance(view_class, type) and issubclass(view_class, ExtensionView)):
+                errors.append(
+                    checks.Error(
+                        f"The {kind} extension {extension_class.__name__} is named {name!r}, and one of the API's "
+                        f"own routes serves {shown.format(name=name)} instead.",
+                        hint="Rename the extension, in the plugin that registers it.",
+                        id="rest_api.E003",
+                    )
+                )
     return errors
