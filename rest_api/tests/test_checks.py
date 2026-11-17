@@ -68,7 +68,7 @@ def register_extension_named(base, name):
         "name": name,
         "description": "Sample",
         "allows": lambda self, target, caller: True,
-        "summary": lambda self, target, caller: {},
+        "summary": lambda self, target, caller, params: {},
     }
     return register_api_extension(type(f"{name.title()}Extension", (base,), body))
 

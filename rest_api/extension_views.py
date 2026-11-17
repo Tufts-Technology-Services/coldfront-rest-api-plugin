@@ -10,6 +10,7 @@ it: a missing target and a refusal are the same 404, so a caller can't tell who 
 import logging
 
 from coldfront_utils.api_extensions import (
+    ExtensionBadRequest,
     ExtensionNotFound,
     ExtensionUnavailable,
     find_extension,
@@ -43,7 +44,8 @@ def get_or_404(model, **lookup):
 
 class ExtensionView(APIView):
     """
-    GET <target>/<name>/ and <target>/<name>/<key>/: an extension's summary, or one of its items.
+    GET <target>/<name>/ and <target>/<name>/<key>/: an extension's summary, or one of its items,
+    given the query parameters.
     A subclass serves one kind, and says how to find its target and how to log a service account's
     lookup of it.
     """
@@ -71,13 +73,18 @@ class ExtensionView(APIView):
         extension = extension_class()
         if not extension.allows(target, caller):
             raise Http404
+        # {name: [value, ...]}, every value of a repeated parameter; by keyword, which every
+        # extension accepts (registration checks it)
+        params = {name: request.query_params.getlist(name) for name in request.query_params}
         try:
             if key is None:
-                data = extension.summary(target, caller)
+                data = extension.summary(target, caller, params=params)
             else:
-                data = extension.item(target, key, caller)
+                data = extension.item(target, key, caller, params=params)
         except ExtensionNotFound:
             raise Http404 from None
+        except ExtensionBadRequest as bad_request:
+            return Response({"detail": str(bad_request)}, status=400)
         except ExtensionUnavailable as unavailable:
             return Response({"detail": str(unavailable)}, status=503)
         except Exception:

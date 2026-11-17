@@ -9,6 +9,7 @@ import logging
 import pytest
 from coldfront_utils.api_extensions import (
     AllocationExtension,
+    ExtensionBadRequest,
     ExtensionNotFound,
     ExtensionUnavailable,
     PersonExtension,
@@ -25,7 +26,8 @@ calls = []
 
 
 class PersonNotes(PersonExtension):
-    """Open to the person themselves and superusers. Items: any key but the special ones below."""
+    """Open to the person themselves and superusers. Items: any key but the special ones below. The
+    summary echoes its params, and takes ?year= as a number only."""
 
     name = "notes"
     description = "A person's notes"
@@ -33,11 +35,13 @@ class PersonNotes(PersonExtension):
     def allows(self, target, caller):
         return caller == target or caller.is_superuser
 
-    def summary(self, target, caller):
+    def summary(self, target, caller, params):
         calls.append((self.name, "summary"))
-        return {"extension": self.name, "version": self.version, "username": target.username}
+        if any(not year.isdigit() for year in params.get("year", [])):
+            raise ExtensionBadRequest("year must be a number.")
+        return {"extension": self.name, "version": self.version, "username": target.username, "params": params}
 
-    def item(self, target, key, caller):
+    def item(self, target, key, caller, params):
         calls.append((self.name, "item"))
         if key == "missing":
             raise ExtensionNotFound(key)
@@ -45,7 +49,13 @@ class PersonNotes(PersonExtension):
             raise ExtensionUnavailable("Notes are unavailable right now.")
         if key == "broken":
             raise RuntimeError("the notes store sent something unexpected")
-        return {"extension": self.name, "version": self.version, "username": target.username, "key": key}
+        return {
+            "extension": self.name,
+            "version": self.version,
+            "username": target.username,
+            "key": key,
+            "params": params,
+        }
 
 
 class OldPersonNotes(PersonNotes):
@@ -63,7 +73,7 @@ class ProjectNotes(ProjectExtension):
     def allows(self, target, caller):
         return can_view_project(caller, target)
 
-    def summary(self, target, caller):
+    def summary(self, target, caller, params):
         calls.append((self.name, "summary"))
         return {"extension": self.name, "version": self.version, "project": target.pk}
 
@@ -78,11 +88,11 @@ class AllocationUsage(AllocationExtension):
     def allows(self, target, caller):
         return can_view_allocation(caller, target)
 
-    def summary(self, target, caller):
+    def summary(self, target, caller, params):
         calls.append((self.name, "summary"))
         return {"extension": self.name, "version": self.version, "allocation": target.pk}
 
-    def item(self, target, key, caller):
+    def item(self, target, key, caller, params):
         calls.append((self.name, "item"))
         return {"extension": self.name, "version": self.version, "allocation": target.pk, "key": key}
 
@@ -147,7 +157,7 @@ def test_latest_and_unversioned_serve_the_same_extensions(api_client, smith, ver
     response = get_as(api_client, smith, extension_url("person", "notes", version=version, username="smith01"))
 
     assert response.status_code == 200
-    assert response.json() == {"extension": "notes", "version": 1, "username": "smith01"}
+    assert response.json() == {"extension": "notes", "version": 1, "username": "smith01", "params": {}}
 
 
 def test_the_apis_own_routes_win_over_an_extension_of_the_same_name(api_client, smith, project):
@@ -170,14 +180,14 @@ def test_a_person_sees_their_own_summary(api_client, smith):
     response = get_as(api_client, smith, extension_url("person", "notes", username="smith01"))
 
     assert response.status_code == 200
-    assert response.json() == {"extension": "notes", "version": 1, "username": "smith01"}
+    assert response.json() == {"extension": "notes", "version": 1, "username": "smith01", "params": {}}
 
 
 def test_a_person_sees_their_own_item(api_client, smith):
     response = get_as(api_client, smith, extension_url("person", "notes", key="2026", username="smith01"))
 
     assert response.status_code == 200
-    assert response.json() == {"extension": "notes", "version": 1, "username": "smith01", "key": "2026"}
+    assert response.json() == {"extension": "notes", "version": 1, "username": "smith01", "key": "2026", "params": {}}
 
 
 def test_whom_allows_admits_sees_someone_elses(api_client, make_user, smith):
@@ -267,6 +277,57 @@ def test_extensions_are_read_only(api_client, smith):
 
     assert api_client.post(extension_url("person", "notes", username="smith01"), {}).status_code == 405
     assert calls == []
+
+
+# query parameters
+
+
+def test_the_query_parameters_reach_the_summary_with_every_value_of_a_repeated_one(api_client, smith):
+    url = extension_url("person", "notes", username="smith01") + "?year=2025&year=2026&tag=lab"
+
+    response = get_as(api_client, smith, url)
+
+    assert response.json()["params"] == {"year": ["2025", "2026"], "tag": ["lab"]}
+
+
+def test_the_query_parameters_reach_an_item(api_client, smith):
+    url = extension_url("person", "notes", key="2026", username="smith01") + "?tag=lab"
+
+    response = get_as(api_client, smith, url)
+
+    assert response.json()["params"] == {"tag": ["lab"]}
+
+
+def test_extension_bad_request_is_a_400_with_its_message(api_client, smith):
+    url = extension_url("person", "notes", username="smith01") + "?year=last"
+
+    response = get_as(api_client, smith, url)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "year must be a number."}
+
+
+def test_a_refused_caller_gets_a_404_whatever_the_parameters(api_client, make_user, smith):
+    url = extension_url("person", "notes", username="smith01") + "?year=last"
+
+    response = get_as(api_client, make_user("jones01"), url)
+
+    assert response.status_code == 404
+    assert calls == []
+
+
+def test_params_can_be_taken_by_keyword_only(api_client, smith, project):
+    class KeywordNotes(ProjectNotes):
+        name = "keyword-notes"
+
+        def summary(self, target, caller, *, params):
+            return {"params": params}
+
+    register_api_extension(KeywordNotes)
+
+    response = get_as(api_client, smith, extension_url("project", "keyword-notes", pk=project.pk) + "?a=1")
+
+    assert response.json() == {"params": {"a": ["1"]}}
 
 
 # project and allocation extensions

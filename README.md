@@ -46,11 +46,13 @@ serves each one at
 - `GET /api/v2/projects/<id>/<name>/` and `.../<name>/<key>/`, for a project,
 - `GET /api/v2/allocations/<id>/<name>/` and `.../<name>/<key>/`, for an allocation,
 
-under every prefix. The extension decides who sees its content, with permissions its plugin
+under every prefix, with the request's query parameters passed to the extension. A summary lists
+its items by key: an item's URL is the summary's URL plus `<key>/`. The extension decides who sees
+its content, with permissions its plugin
 defines; the rules above are only for the API's own endpoints. A person, project or allocation that
 doesn't exist, and one the extension doesn't allow the caller, are the same 404, as is a name no
-extension has. An extension that can't reach its data is a 503 with a message; one that fails is a
-500, logged to `rest_api.extensions`. Service accounts' lookups are logged as for the API's own
+extension has. Parameters the extension can't use are a 400, and an extension that can't reach its
+data a 503, each with a message; one that fails is a 500, logged to `rest_api.extensions`. Service accounts' lookups are logged as for the API's own
 endpoints, so a service account that should read an extension needs its plugin's permission as well
 as `rest_api.view_any_person`.
 
