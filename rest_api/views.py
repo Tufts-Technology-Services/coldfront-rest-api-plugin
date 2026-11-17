@@ -162,7 +162,11 @@ class AllocationDetailView(RetrieveAPIView):
 
     def get_object(self):
         caller = self.request.user
-        allocation = get_object_or_404(allocations_with_details(caller), pk=self.kwargs["pk"])
+        # not get_object_or_404, whose message names the model: a missing allocation and a refused
+        # one would then differ, telling anyone which ids exist
+        allocation = allocations_with_details(caller).filter(pk=self.kwargs["pk"]).first()
+        if allocation is None:
+            raise Http404
         if not (can_view_all_allocations(caller) or allocation.has_perm(caller, AllocationPermission.USER)):
             raise Http404
         return allocation
