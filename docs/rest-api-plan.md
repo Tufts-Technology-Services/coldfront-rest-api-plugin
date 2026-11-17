@@ -71,8 +71,9 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   callers. Repo `coldfront-rest-api-plugin`, package `rest_api`. It follows the
   plugin conventions: a simple `AppConfig`, hatchling, uv, tests in `rest_api/tests/`, the
   shared ruff setup, CI and pre-commit. It depends on `coldfront`, `djangorestframework` and
-  `django-filter`; `coldfront_utils` and `coldfront-storage-plugin` (both from git) come in with
-  the storage endpoints, the first things to need them.
+  `django-filter`, and, for [plugin extensions](#plugin-extensions), on `coldfront_utils` (from
+  git). Not on `coldfront-storage-plugin` or any other plugin (decided 2026-11-16): plugins don't
+  import each other, so a plugin serves its content through the API by registering an extension.
 - **Credit ColdFront's API for what we reuse** (decided 2026-11-16). Where code is copied or
   adapted from `coldfront.plugins.api` (its serializers, viewsets, the `REST_FRAMEWORK`
   settings), the file says so in a comment at the top, naming the source file and "(C) ColdFront
@@ -124,13 +125,17 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
 
 ## Who can see what
 
-| Caller | Own data | Anyone's projects | Anyone's allocations | Private attributes |
-| --- | --- | --- | --- | --- |
-| Any authenticated user, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no |
-| Superusers | yes | yes | yes | yes |
-| Holders of ColdFront's `project.can_view_all_projects` | yes | yes | no | no |
-| Holders of ColdFront's `allocation.can_view_all_allocations` | yes | no | yes | no |
-| A service account with `rest_api.view_any_person` | yes | yes | yes | no |
+| Caller | Own data | Anyone's projects | Anyone's allocations | Anyone's storage | Private attributes |
+| --- | --- | --- | --- | --- | --- |
+| Any authenticated user, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no | no |
+| Superusers | yes | yes | yes | yes | yes |
+| Holders of ColdFront's `project.can_view_all_projects` | yes | yes | no | no | no |
+| Holders of ColdFront's `allocation.can_view_all_allocations` | yes | no | yes | no | no |
+| A service account with `rest_api.view_any_person` | yes | yes | yes | yes | no |
+
+**Storage is the narrowest** (decided 2026-11-16): home and scratch aren't projects or
+allocations, and ColdFront has no permission that covers them, so only superusers and service
+accounts can look up someone else's.
 
 "Own data" follows ColdFront's rules too: on the allocations endpoint, an ordinary user sees the
 allocations ColdFront's allocation list would show them (see
@@ -183,6 +188,103 @@ of the API.
   characters, or None, and a Manage button. The plugin provides the row,
   `rest_api/profile_token_row.html`. The Tufts branding replaces `user/user_profile.html`, so it
   includes the row in its `profile_contents` block; the row shows only on your own profile.
+
+## Plugin extensions
+
+Proposed 2026-11-16; not built. How a plugin serves its own content through the API without the
+API knowing anything about it, and without either importing the other.
+
+**Why.** Plugins don't import each other, and the API is a plugin. Anything it serves about a
+plugin's data would otherwise mean depending on that plugin, or reading its settings and tables,
+which is the same dependency hidden. Even a storage-shaped interface in the API ties it to how
+storage plugins work. So the API offers generic places to attach content, and each plugin
+fills them with its own.
+
+**The pattern** is `coldfront_utils.allocation_request`'s: `coldfront_utils` holds base classes
+and a registry; a plugin subclasses and registers in its `AppConfig.ready()`; the API reads the
+registry. Both import `coldfront_utils`, neither imports the other.
+
+**What `coldfront_utils` provides** (a new module, `coldfront_utils.api_extensions`), with nothing
+about any one plugin's content in it:
+
+- **Three base classes,** one for each thing the API serves: `PersonExtension`,
+  `ProjectExtension` and `AllocationExtension`. A subclass sets `name` (its URL segment:
+  lowercase letters, digits and hyphens) and a one-line `description`, and implements
+  `summary(target, caller)`, and `item(target, key, caller)` if it has items. `target` is the
+  person (a `User`), project or allocation; `caller` is who's asking, so an extension can show
+  less to some callers. They return data that can be rendered as JSON.
+- **Two exceptions** an extension raises instead of knowing about HTTP: `ExtensionNotFound`
+  (404: no such item, or not for this caller) and `ExtensionUnavailable` (503, with a message
+  safe to show callers; the details go in the plugin's own log).
+- **`register_api_extension(cls)`,** which refuses a malformed name, a class that isn't one of
+  the three, and a second extension of the same kind with the same name, raising
+  `ImproperlyConfigured` at startup, as `register_request_section` does.
+- **Lookups for the API:** `find_extension(kind, name)` and `registered_extensions()`.
+- **Base classes, not protocols** (decided 2026-11-16). All three kinds have the same shape, so a
+  protocol couldn't tell them apart and the registry couldn't check which kind it was given;
+  base classes carry the shared defaults (`item()` answering "not found", an empty `opened_by`)
+  and the contract's docstrings; nothing here checks protocols statically (the repos run ruff
+  only); and `allocation_request`'s `RequestSection` is a base class too. A lighter,
+  function-based registration can come later if a plugin wants one.
+- **Size:** about 100 to 150 lines and their tests. The work is in the API plugin and in each
+  plugin's extension.
+
+**What the API does,** knowing only the registry:
+
+- **Generic routes,** under every version prefix (`v2/`, `latest/`, none):
+  `users/<username>/<name>/` and `users/<username>/<name>/<key>/`, and the same under
+  `projects/<id>/` and `allocations/<id>/`. They're looked up in the registry when a request
+  arrives, so a name nothing registered is a 404. A name that clashes with the API's own routes
+  (`projects` under `users/`) is a system check error.
+- **Who may see the target,** decided before the extension runs:
+  - a person: themselves, superusers and service accounts with `view_any_person`;
+  - a project: ColdFront's project page rule (superusers, `can_view_all_projects`, service
+    accounts, an Active member);
+  - an allocation: ColdFront's allocation page rule, as `/allocations/<id>/` uses.
+
+  An extension may widen that, by listing ColdFront permissions that also open it
+  (`opened_by = ["allocation.can_view_all_allocations"]`), and narrow it, by raising
+  `ExtensionNotFound`. Who may see whom stays decided in one place.
+- **Logging** of service accounts' lookups, as for the API's own endpoints.
+- **Errors:** `ExtensionNotFound` is a 404, `ExtensionUnavailable` a 503 with its message, and
+  anything else a 500, logged.
+- **Discovery:** `GET /api/v2/extensions/` lists what's registered, by kind, with each name and
+  description, so a caller can see what a deployment serves.
+
+**What it means for storage:** the storage plugin registers a `PersonExtension` named `storage`
+(the area list as its summary, each area as an item) and, for phase 4, an `AllocationExtension`
+named `usage`. The VAST lookup, `USER_STORAGE_AREAS` and `STORAGE_LOG_ONLY` all stay in the
+storage plugin, which already has the VAST client setup, `StorageHandler` and the attribute
+names. The API serves `users/<username>/storage/` without containing the word. The lookup built
+on the `storage-areas` branch (the API plugin's `user_storage.py`, with its tests) moves there
+largely as it is.
+
+**Not in the first version:** an extension adding fields to the API's own responses (billing's
+cost on each allocation in the list, say). Useful, but a different kind of extension, with
+questions of its own (query counts, which callers see the field).
+
+**Open questions:**
+
+- **Versioning.** An extension's data shape is its plugin's, so `/api/v2/` alone doesn't pin it.
+  Either an extension declares the API versions it's served under, or it puts its own `version`
+  in what it returns and keeps breaking changes to a new name. Leaning towards the second: the
+  plugin owns its shape, and callers can see it.
+- **The module's name** in `coldfront_utils`: `api_extensions` above.
+- **Whether `summary` should be paginated** for extensions with many items, as the API's lists are.
+- **To explore: the registry in this repo instead** (asked 2026-11-16). The base classes,
+  exceptions and registry would live in `rest_api` (say `rest_api.extensions`), and a plugin would
+  depend on it optionally (an `api` extra), registering its extensions only when `rest_api` is
+  installed. For: the API owns its own extension contract and its versioning, and
+  `coldfront_utils` doesn't grow an API module. Against, or to settle: it's a plugin importing
+  another plugin, if only optionally and in one direction, against the "plugins don't import each
+  other" rule; how a plugin registers only when `rest_api` is there (`apps.is_installed` in
+  `ready()`, then import); and testing a plugin's extension with and without it.
+
+**Effort:** about two to three days across three repos, in this order: coldfront-utils (base
+classes, exceptions, registry, tests: half a day to a day), the API plugin (generic routes,
+access rules, errors, discovery, tests with fake extensions: about a day), the storage plugin
+(its `storage` extension, mostly the lookup already written: half a day to a day). They deploy
+together through the fork's lock.
 
 ## Endpoints
 
@@ -285,6 +387,9 @@ row on its project, and either the PI or Manager role, or an Active, New or Pend
 
 ### `GET /api/v2/users/<username>/storage/`
 
+Served by the storage plugin's `storage` person extension (see
+[Plugin extensions](#plugin-extensions)); this section and the next describe what it returns.
+
 The storage areas that belong to a person rather than to a project: their home folder and
 scratch. These aren't ColdFront allocations, so this is the only place the API reports them. The
 list names each area and the URL to ask about it, and calls no storage system:
@@ -355,12 +460,15 @@ USER_STORAGE_AREAS = {
 }
 ```
 
-- **No default.** A deployment that hasn't set it gets a system check error, not a guess.
+- **Unset, there are no storage areas** (changed 2026-11-16 from a system check error, since the
+  plugin no longer needs the storage plugin): the area list is empty, and any area is a 404.
+- **Set, it must be well formed:** a storage plugin system check error for each area that isn't a dict, has no
+  client, has a path that isn't absolute, names a client that isn't in `STORAGE_PLUGIN_CLIENTS`,
+  or has a name with a slash in it (the name is a URL segment).
 - **Each area names its own client,** so areas needn't share a storage system.
-- **How an area is looked up depends on its client's kind,** the `"type"` key in
-  `STORAGE_PLUGIN_CLIENTS` (see [Where an allocation lives](#where-an-allocation-lives)). Only
-  VAST user quotas are planned, below. An area on a client of any other kind is a system check
-  error until a lookup for that kind is written.
+- **Every area's client is taken to be a VAST.** Only VAST user quotas are looked up. The
+  `"type"` key that would tell a VAST from a TrueNAS (see
+  [Where an allocation lives](#where-an-allocation-lives)) comes with phase 4, which needs it.
 
 ### Home
 
@@ -443,31 +551,35 @@ override, 58 GB used) and the `tphimm01` **group**.
   that way. VAST ignores a filter it doesn't know and answers with every entry, so the mistake
   showed only on 2026-11-16, when a check against the hpc VMS got all 10,685 `/homedir` entries
   back. Of the names tried, only `entity__identifier` filters, under API versions `v7` and
-  `latest` alike. Because a misspelt filter fails silently, the storage plugin's strict match
-  below stays required, not a precaution.
+  `latest` alike. Because a misspelt filter fails silently, the lookup's strict match below
+  stays required, not a precaution.
 - **Paging works as the client expects** (checked 2026-11-16): VAST honours `page_size`, and with
   `page_size=1` the client followed VAST's next link to get a user's two entries.
 - **The UID fallback works** (checked 2026-11-16): `entity__identifier=1069` on `/homedir`
   returned the one entry VAST records by that UID (`identifier_type` `uid`, 30 GB default, 3.4 GB
   used). A username matches only entries recorded by username, and a UID only those recorded by
-  UID, so the two lookups don't overlap. Users and groups share names, so the
-`is_group: false` match above is required, not a precaution. The storage plugin makes that call
-per person, then with the UID if the username finds no user entry, and caches the answer for a
-few minutes. No scheduled task or bulk copy is needed.
+  UID, so the two lookups don't overlap.
+
+Users and groups share names, so the `is_group: false` match above is required, not a
+precaution. The lookup makes that call per person, then with the UID if the username finds no
+user entry, and caches the answer for two minutes. No scheduled task or bulk copy is needed.
 
 Then:
 
-- **The VAST call belongs in coldfront-storage-plugin**, in `storage/vast/vast.py`, which
-  already owns `get_vast_client()` and the client config. `rest_api` calls it, as
-  `tufts_local` calls `storage.truenas` for the tier 2 report. The VAST calls go in
-  vast-api-client first, as methods next to `get_quotas()`: the quota detail
-  (`GET /quotas/{id}`) and the user quota entries (`GET /userquotas/`, following `next` across
-  pages).
-- **Each area's quota `system_id` and default limits** come from `GET /quotas/{id}`, found by
-  path once and cached for an hour: they change only when someone edits the quota.
-- **The existing `get_all_quotas()` can't be reused as it is.** It keeps only `path`,
-  `soft_limit`, `hard_limit` and `pretty_state`, and drops `system_id`,
-  `default_user_quota` and every usage field.
+- **The lookup is the storage plugin's,** behind its `storage` extension (see
+  [Plugin extensions](#plugin-extensions)). It calls vast-api-client's `get_quota` and
+  `get_user_quotas` with the client the storage plugin's `get_vast_client()` builds for the
+  area's `STORAGE_PLUGIN_CLIENTS` entry. (It was built first in the API plugin, on the
+  `storage-areas` branch, before the extension design; it moves as it is.)
+- **`STORAGE_LOG_ONLY` on** (its default, and set on cf-s01sim) means nothing is asked of VAST:
+  the area endpoint answers 503, "Storage lookups are off on this host", and the log says what
+  would have been looked up (decided 2026-11-16).
+- **Each area's quota id** is found by path once and cached for an hour: it changes only if the
+  quota is recreated. Its `system_id`, default limits and `last_user_quotas_update` are read with
+  each lookup, so `retrieved_at` is current.
+- **Caching:** each person's answer, per area, for two minutes, in Django's cache
+  (`coldfront_utils`' `ttl_cache`), which the web workers share. VAST recalculates usage every
+  minute or two, so nothing fresher is to be had.
 - **Errors:** VAST unreachable or timing out is a 503 with a short message, never VAST's own
   error text, which includes the VMS hostname (the quota's `url` field does too, so it is never
   passed through). It fails only the area asked about. A username ColdFront doesn't know is a
@@ -624,6 +736,7 @@ coldfront-rest-api-plugin/
         serializers.py   # attribute serializers: private ones for superusers only
         filters.py       # AllocationFilter (django-filter FilterSet)
         views.py
+        extension_views.py # generic routes for plugin extensions (see Plugin extensions)
         token_views.py   # the token page: create, regenerate, revoke your own token
         templates/rest_api/  # the token page, and the row the profile page includes
         urls.py          # mounted at api/ by coldfront-ansible; routes under v2/, and token/
@@ -654,12 +767,14 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 2. **Allocations endpoints:** the filtered list and the single allocation, with ColdFront's rules
    for who sees which. Built 2026-11-16 on the `allocations-endpoint` branch, with the move to
    ColdFront's permissions and project statuses and the projects endpoint's `?status=`.
-3. **Storage areas:** the `"type"` key in `STORAGE_PLUGIN_CLIENTS`, the vast-api-client user
-   quota calls, the storage plugin's user quota lookup and its tests, then the area list and
-   area endpoints with `USER_STORAGE_AREAS` and its system check. Home and scratch are both
-   ready ([Scratch](#scratch), checked 2026-11-16). The vast-api-client calls are built and
-   were tried against the hpc VMS on 2026-11-16 (its `user-quotas` branch), by username, by UID
-   and across pages.
+3. **Plugin extensions, then storage areas:** the vast-api-client user quota calls (built and
+   tried against the hpc VMS on 2026-11-16, by username, by UID and across pages; merged). Then
+   [plugin extensions](#plugin-extensions) in coldfront-utils and the API plugin, and the
+   storage plugin's `storage` extension, which takes over the lookup first built in the API
+   plugin on the `storage-areas` branch. Home and scratch are both ready
+   ([Scratch](#scratch)). To deploy: coldfront-utils, the storage plugin and the API plugin
+   together through the fork's lock, then `USER_STORAGE_AREAS` in coldfront-ansible's Tufts
+   settings, with `STORAGE_LOG_ONLY` off on the hosts that should ask VAST.
 4. **Live allocation usage:** the storage plugin's directory quota lookup, then
    `/allocations/<id>/usage/`. Needs the allocations endpoint (phase 2) and the VAST usage
    field settled (see "Still to check" under
@@ -686,11 +801,13 @@ it, along with the usual in-memory SQLite and MD5 hasher.
   allocations see every project status. The single allocation follows `Allocation.has_perm`.
 - The system checks: an error when `rest_framework` or `rest_framework.authtoken` isn't
   installed, and when `coldfront.plugins.api` is.
-- Storage areas with a fake VAST client, like `FakeTrueNASClient` in the storage plugin's
-  `test_tasks.py`: the area list in settings order with no call out, found by username, found
-  by UID, no entry (default limits, 0 used), each area asking the client its settings name, an
-  unknown area (404), VAST failing (503), and the cache answering a second request. The system
-  check: `USER_STORAGE_AREAS` unset, or naming a client that doesn't exist or isn't VAST.
+- Plugin extensions with fake extensions registered for the test: each kind's routes under
+  every prefix, the access rules (the person, superusers, service accounts, ColdFront's project
+  and allocation page rules, a permission an extension adds), `ExtensionNotFound` and
+  `ExtensionUnavailable` becoming 404 and 503, an unknown name a 404, a name clashing with the
+  API's routes a system check error, logging, and the discovery list. The storage extension's
+  own tests (the VAST lookup, with a fake VAST client that filters as VAST does) live in the
+  storage plugin.
 - Allocation usage: a VAST allocation on each of two instances asked of its own instance, a
   TrueNAS allocation read from stored attributes with no call out, a non-storage allocation and
   one the caller can't see (both 404), no VAST quota at the path (404 with its own detail), the
@@ -700,7 +817,26 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 
 ## Open questions
 
-None. Answered 2026-11-02 (the first three here on 2026-11-16) and written into
+Open as of 2026-11-16:
+
+- **Plugin extensions:** the design in [Plugin extensions](#plugin-extensions) is to be reviewed
+  before it's built, with its own open questions: how an extension's data shape is versioned
+  (leaning towards each extension returning its own `version`), the module's name in
+  `coldfront_utils`, and whether summaries are paginated.
+- **Who may look up someone else's storage:** proposed as superusers and service accounts only,
+  since ColdFront has no permission covering home folders; to be confirmed. Under the extension
+  design that's the default for every person extension, which the storage extension could widen
+  with `opened_by`.
+- **Per-folder usage inside a home** (top-level folders with their sizes): VAST can't give it
+  accurately and close to live (vast-api-client's `docs/vast-usage-findings.md`). The choice is
+  between a background `du` service on the cluster (live), Starfish (daily, if it scans
+  `/homedir`) and leaving it out (the live total and the folder names from `list_dir`).
+- **Whether `used_capacity` counts apparent or allocated bytes** (`du -sb` or `du -sB1`): they
+  differed by 1.5% on one home; compare in exact bytes.
+- **Phase 4's VAST usage field** (`used_capacity` or `used_effective_capacity` on a directory
+  quota), under [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage), "Still to check".
+
+Answered 2026-11-02 (the first three here on 2026-11-16) and written into
 [Decisions](#decisions) and the endpoint sections:
 
 - `PLUGIN_API` goes off and the API is a new plugin, `rest_api`, mounted at
