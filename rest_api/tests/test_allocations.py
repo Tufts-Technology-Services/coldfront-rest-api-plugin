@@ -271,10 +271,16 @@ def test_someone_elses_allocation_is_a_404(api_client, other_allocation, smith):
     assert get_detail(api_client, smith, other_allocation).status_code == 404
 
 
-def test_an_allocation_that_doesnt_exist_is_the_same_404(api_client, smith, db):
-    api_client.force_authenticate(smith)
+def test_an_allocation_that_doesnt_exist_is_the_same_404(api_client, other_allocation, smith):
+    refused = get_detail(api_client, smith, other_allocation)
+    missing = api_client.get(detail_url(999999))
 
-    assert api_client.get(detail_url(999999)).status_code == 404
+    # the whole response, not just the status: a message naming the model would tell them apart
+    assert (
+        (missing.status_code, missing.json())
+        == (refused.status_code, refused.json())
+        == (404, {"detail": "Not found."})
+    )
 
 
 @pytest.mark.parametrize("flags", [{"superuser": True}, {"perms": [VIEW_ALL_ALLOCATIONS]}, {"view_any_person": True}])
