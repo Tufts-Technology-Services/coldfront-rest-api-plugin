@@ -252,7 +252,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "coldfront", specifier = ">=1.1.8,<2" },
-    { name = "coldfront-utils", git = "https://github.com/Tufts-Technology-Services/coldfront-utils.git?rev=api-extensions" },
+    { name = "coldfront-utils", git = "https://github.com/Tufts-Technology-Services/coldfront-utils.git?rev=main" },
     { name = "django-filter", specifier = ">=25.1" },
     { name = "djangorestframework", specifier = ">=3.16.0" },
 ]
@@ -269,7 +269,7 @@ dev = [
 [[package]]
 name = "coldfront-utils"
 version = "0.3.1"
-source = { git = "https://github.com/Tufts-Technology-Services/coldfront-utils.git?rev=api-extensions#3a21f9131ac33c203dc9a275d0c8bea95c0fd254" }
+source = { git = "https://github.com/Tufts-Technology-Services/coldfront-utils.git?rev=main#d8010b99c476c36bec8ba0d61e9d3be02b10f90b" }
 dependencies = [
     { name = "coldfront" },
 ]
