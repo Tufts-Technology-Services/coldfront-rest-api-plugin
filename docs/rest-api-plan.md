@@ -125,17 +125,18 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
 
 ## Who can see what
 
-| Caller | Own data | Anyone's projects | Anyone's allocations | Anyone's storage | Private attributes |
-| --- | --- | --- | --- | --- | --- |
-| Any authenticated user, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no | no |
-| Superusers | yes | yes | yes | yes | yes |
-| Holders of ColdFront's `project.can_view_all_projects` | yes | yes | no | no | no |
-| Holders of ColdFront's `allocation.can_view_all_allocations` | yes | no | yes | no | no |
-| A service account with `rest_api.view_any_person` | yes | yes | yes | yes | no |
+| Caller | Own data | Anyone's projects | Anyone's allocations | Private attributes |
+| --- | --- | --- | --- | --- |
+| Any authenticated user, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no |
+| Superusers | yes | yes | yes | yes |
+| Holders of ColdFront's `project.can_view_all_projects` | yes | yes | no | no |
+| Holders of ColdFront's `allocation.can_view_all_allocations` | yes | no | yes | no |
+| A service account with `rest_api.view_any_person` | yes | yes | yes | no |
 
-**Storage is the narrowest** (decided 2026-11-16): home and scratch aren't projects or
-allocations, and ColdFront has no permission that covers them, so only superusers and service
-accounts can look up someone else's.
+**This table covers the API's own endpoints only.** What a plugin serves through an extension
+(storage, say) is the plugin's to decide, with permissions of its own (decided 2026-11-17; see
+[Plugin extensions](#plugin-extensions)). It replaces the 2026-11-16 rule, which had the API say
+who could see storage.
 
 "Own data" follows ColdFront's rules too: on the allocations endpoint, an ordinary user sees the
 allocations ColdFront's allocation list would show them (see
@@ -191,8 +192,8 @@ of the API.
 
 ## Plugin extensions
 
-Proposed 2026-11-16; not built. How a plugin serves its own content through the API without the
-API knowing anything about it, and without either importing the other.
+Proposed 2026-11-16, settled 2026-11-17; not built. How a plugin serves its own content through
+the API without the API knowing anything about it, and without either importing the other.
 
 **Why.** Plugins don't import each other, and the API is a plugin. Anything it serves about a
 plugin's data would otherwise mean depending on that plugin, or reading its settings and tables,
@@ -202,30 +203,53 @@ fills them with its own.
 
 **The pattern** is `coldfront_utils.allocation_request`'s: `coldfront_utils` holds base classes
 and a registry; a plugin subclasses and registers in its `AppConfig.ready()`; the API reads the
-registry. Both import `coldfront_utils`, neither imports the other.
+registry. Both import `coldfront_utils`, neither imports the other: the storage plugin doesn't
+depend on this one, nor this one on it. They meet only at runtime, through the registry, when
+both are installed. Without the API, a plugin's registration does nothing; without the plugin,
+its routes are 404s.
 
-**What `coldfront_utils` provides** (a new module, `coldfront_utils.api_extensions`), with nothing
-about any one plugin's content in it:
+**The registry is in `coldfront_utils`, not in this repo** (decided 2026-11-17). Here, plugins
+would depend on the API, optionally (an `api` extra, registering only when `rest_api` is
+installed), which is a plugin importing a plugin, and each would need testing with and without
+it. In `coldfront_utils`, which every plugin already depends on, none of that arises. The API
+itself stays a plugin of its own rather than moving into `coldfront_utils`: each API change would
+otherwise be a `coldfront_utils` release, moving the library every plugin shares, and
+`view_any_person` belongs to the `rest_api` app label, so moving the app would lose its grants.
+
+**What `coldfront_utils` provides** (a new module, `coldfront_utils.api_extensions`, decided
+2026-11-17), with nothing about any one plugin's content in it:
 
 - **Three base classes,** one for each thing the API serves: `PersonExtension`,
   `ProjectExtension` and `AllocationExtension`. A subclass sets `name` (its URL segment:
-  lowercase letters, digits and hyphens) and a one-line `description`, and implements
+  lowercase letters, digits and hyphens), a one-line `description` and a `version` (see
+  [Versioning](#versioning)), and implements `allows(target, caller)`,
   `summary(target, caller)`, and `item(target, key, caller)` if it has items. `target` is the
-  person (a `User`), project or allocation; `caller` is who's asking, so an extension can show
-  less to some callers. They return data that can be rendered as JSON.
+  person (a `User`), project or allocation; `caller` is who's asking. `summary` and `item` return
+  data that can be rendered as JSON.
+- **`allows(target, caller)` decides who sees the extension's content** (decided 2026-11-17). It
+  has no default: an extension that doesn't implement it is closed to everyone. The plugin
+  defines whatever permissions it needs as ordinary Django permissions on one of its own models
+  (`storage.view_any_storage`, say), so the API never needs to know them.
+- **Helpers for ColdFront's own rules,** so an extension can follow them without the API:
+  `can_view_project(caller, project)` and `can_view_allocation(caller, allocation)`, the rules
+  ColdFront's project and allocation pages use. An allocation extension that anyone who can see
+  the allocation may see is `return can_view_allocation(caller, target)`.
 - **Two exceptions** an extension raises instead of knowing about HTTP: `ExtensionNotFound`
   (404: no such item, or not for this caller) and `ExtensionUnavailable` (503, with a message
   safe to show callers; the details go in the plugin's own log).
-- **`register_api_extension(cls)`,** which refuses a malformed name, a class that isn't one of
-  the three, and a second extension of the same kind with the same name, raising
-  `ImproperlyConfigured` at startup, as `register_request_section` does.
-- **Lookups for the API:** `find_extension(kind, name)` and `registered_extensions()`.
+- **`register_api_extension(cls)`,** which refuses a malformed name, a class that isn't exactly
+  one of the three kinds, and a second class of the same kind with the same name, raising
+  `ImproperlyConfigured` at startup, as `register_request_section` does. Registering the same
+  class twice is allowed, since `ready()` can run more than once. Written in
+  `register_request_section`'s style; the two registries share only a few lines, so they stay
+  separate.
+- **Lookups for the API:** `find_extension(kind, name)` and `registered_extensions()`. The
+  registry holds classes, keyed by kind and name, and the API makes an instance per request.
 - **Base classes, not protocols** (decided 2026-11-16). All three kinds have the same shape, so a
   protocol couldn't tell them apart and the registry couldn't check which kind it was given;
-  base classes carry the shared defaults (`item()` answering "not found", an empty `opened_by`)
-  and the contract's docstrings; nothing here checks protocols statically (the repos run ruff
-  only); and `allocation_request`'s `RequestSection` is a base class too. A lighter,
-  function-based registration can come later if a plugin wants one.
+  base classes carry the shared defaults (`item()` answering "not found") and the contract's
+  docstrings; nothing here checks protocols statically (the repos run ruff only); and
+  `allocation_request`'s `RequestSection` is a base class too.
 - **Size:** about 100 to 150 lines and their tests. The work is in the API plugin and in each
   plugin's extension.
 
@@ -236,53 +260,68 @@ about any one plugin's content in it:
   `projects/<id>/` and `allocations/<id>/`. They're looked up in the registry when a request
   arrives, so a name nothing registered is a 404. A name that clashes with the API's own routes
   (`projects` under `users/`) is a system check error.
-- **Who may see the target,** decided before the extension runs:
-  - a person: themselves, superusers and service accounts with `view_any_person`;
-  - a project: ColdFront's project page rule (superusers, `can_view_all_projects`, service
-    accounts, an Active member);
-  - an allocation: ColdFront's allocation page rule, as `/allocations/<id>/` uses.
-
-  An extension may widen that, by listing ColdFront permissions that also open it
-  (`opened_by = ["allocation.can_view_all_allocations"]`), and narrow it, by raising
-  `ExtensionNotFound`. Who may see whom stays decided in one place.
+- **One target check, then the extension's** (decided 2026-11-17). The API looks up the person,
+  project or allocation, and answers 404 if there's none. Then it asks the extension's
+  `allows(target, caller)`; `False` is the same 404, so a caller can't tell a username that
+  doesn't exist from one it may not ask about. Who may see the extension's content is decided
+  only there: the API adds no rule of its own, and passes the extension no notion of a service
+  account. A service account that should read a plugin's content is granted that plugin's
+  permission, alongside `view_any_person` for the API's own endpoints.
 - **Logging** of service accounts' lookups, as for the API's own endpoints.
 - **Errors:** `ExtensionNotFound` is a 404, `ExtensionUnavailable` a 503 with its message, and
   anything else a 500, logged.
-- **Discovery:** `GET /api/v2/extensions/` lists what's registered, by kind, with each name and
-  description, so a caller can see what a deployment serves.
+- **Discovery:** `GET /api/v2/extensions/` lists what's registered, by kind, with each name,
+  description, version and whether it's deprecated, so a caller can see what a deployment serves.
+
+### Versioning
+
+Decided 2026-11-17. The API's version (`v2`) covers what the API owns: routing, authentication,
+the error format and paging. Each extension's data shape is its plugin's, with a version of its
+own:
+
+- **`version`** is a class attribute (an integer, starting at 1), listed by the discovery
+  endpoint, and the extension includes it in what it returns, so a caller can see what it got:
+  `{"extension": "storage", "version": 1, ...}`.
+- **Adding a field isn't a breaking change,** and keeps the version.
+- **A breaking change is a new name.** The plugin registers a second extension,
+  `storage-v2` with `version = 2`, served at `/api/v2/users/smith01/storage-v2/`, and keeps the
+  old one, marked `deprecated = True` (shown by discovery), until its callers have moved. Then it
+  stops registering the old one, which becomes a 404.
+- **Every API prefix serves every extension:** a later `/api/v3/` serves `storage-v2` unchanged.
+- **`latest` doesn't follow extension names.** It means the newest API version only;
+  `/api/latest/users/smith01/storage/` is the `storage` extension, whatever newer names exist.
+
+Not chosen: an extension declaring the API versions it's served under (a plugin's change would
+wait for an API release, and an API release for every plugin); `?version=` (each extension
+answering in several shapes); a version segment in the path (`storage/v2/` clashes with item
+keys).
 
 **What it means for storage:** the storage plugin registers a `PersonExtension` named `storage`
 (the area list as its summary, each area as an item) and, for phase 4, an `AllocationExtension`
-named `usage`. The VAST lookup, `USER_STORAGE_AREAS` and `STORAGE_LOG_ONLY` all stay in the
-storage plugin, which already has the VAST client setup, `StorageHandler` and the attribute
-names. The API serves `users/<username>/storage/` without containing the word. The lookup built
-on the `storage-areas` branch (the API plugin's `user_storage.py`, with its tests) moves there
-largely as it is.
+named `usage`. Their code lives in the storage plugin, beside its request section:
+`storage/api_extension.py`, with the lookup in `storage/user_storage.py`. The VAST lookup,
+`USER_STORAGE_AREAS` (and its system check), `STORAGE_LOG_ONLY` and the storage permission all
+stay in the storage plugin, which already has the VAST client setup, `StorageHandler` and the
+attribute names. The API serves `users/<username>/storage/` without containing the word. The
+lookup built on the `storage-areas` branch (the API plugin's `user_storage.py`, with its tests)
+moves there largely as it is; that branch's views and its vast-api-client dependency are dropped.
+
+- **`storage`'s `allows()`:** the person themselves, superusers, and holders of the storage
+  plugin's own `storage.view_any_storage` (for service accounts). ColdFront has no permission
+  covering home folders, so none of its permissions open it.
+- **`usage`'s `allows()`:** `can_view_allocation(caller, target)`, and a 404 (`ExtensionNotFound`)
+  for an allocation that isn't storage.
 
 **Not in the first version:** an extension adding fields to the API's own responses (billing's
 cost on each allocation in the list, say). Useful, but a different kind of extension, with
-questions of its own (query counts, which callers see the field).
-
-**Open questions:**
-
-- **Versioning.** An extension's data shape is its plugin's, so `/api/v2/` alone doesn't pin it.
-  Either an extension declares the API versions it's served under, or it puts its own `version`
-  in what it returns and keeps breaking changes to a new name. Leaning towards the second: the
-  plugin owns its shape, and callers can see it.
-- **The module's name** in `coldfront_utils`: `api_extensions` above.
-- **Whether `summary` should be paginated** for extensions with many items, as the API's lists are.
-- **To explore: the registry in this repo instead** (asked 2026-11-16). The base classes,
-  exceptions and registry would live in `rest_api` (say `rest_api.extensions`), and a plugin would
-  depend on it optionally (an `api` extra), registering its extensions only when `rest_api` is
-  installed. For: the API owns its own extension contract and its versioning, and
-  `coldfront_utils` doesn't grow an API module. Against, or to settle: it's a plugin importing
-  another plugin, if only optionally and in one direction, against the "plugins don't import each
-  other" rule; how a plugin registers only when `rest_api` is there (`apps.is_installed` in
-  `ready()`, then import); and testing a plugin's extension with and without it.
+questions of its own (query counts, which callers see the field). Nor paginated summaries
+(decided 2026-11-17): the storage summary has a few areas; an extension that needs paging can be
+given it then.
 
 **Effort:** about two to three days across three repos, in this order: coldfront-utils (base
-classes, exceptions, registry, tests: half a day to a day), the API plugin (generic routes,
-access rules, errors, discovery, tests with fake extensions: about a day), the storage plugin
+classes, exceptions, registry, the ColdFront rule helpers, tests: half a day to a day), the API
+plugin (generic routes, the target check and `allows()`, errors, discovery, tests with fake
+extensions: about a day), the storage plugin
 (its `storage` extension, mostly the lookup already written: half a day to a day). They deploy
 together through the fork's lock.
 
@@ -396,6 +435,8 @@ list names each area and the URL to ask about it, and calls no storage system:
 
 ```json
 {
+  "extension": "storage",
+  "version": 1,
   "username": "smith01",
   "areas": [
     {"name": "home", "url": "https://rcrm.it.tufts.edu/api/v2/users/smith01/storage/home/"},
@@ -414,6 +455,8 @@ That person's quota and live usage in one area. For home (`/homedir`, on the hpc
 
 ```json
 {
+  "extension": "storage",
+  "version": 1,
   "username": "smith01",
   "area": "home",
   "path": "/homedir",
@@ -614,8 +657,12 @@ storage allocation's quota and usage, as close to live as its storage system all
 stored quota and usage, the Starfish snapshot up to a day old, are already on the allocations
 endpoint as attributes; this endpoint is for callers that need newer numbers.
 
-- **Who can ask:** anyone who can see the allocation on the allocations endpoint (see
-  [Who can see what](#who-can-see-what)). For anyone else it is a 404.
+- **Served by the storage plugin's `usage` allocation extension** (see
+  [Plugin extensions](#plugin-extensions)), whose responses also carry `"extension"` and
+  `"version"`.
+- **Who can ask:** anyone who can see the allocation, by ColdFront's rule
+  (`can_view_allocation` from `coldfront_utils`, the extension's `allows()`). For anyone else it
+  is a 404.
 - **Storage only:** an allocation whose resource has no `StorageHandler` is a 404.
 - **Finding a person's storage allocations** is the allocations endpoint's job:
   `/api/v2/allocations/?username=smith01&resource_type=storage`, then one usage request per
@@ -802,11 +849,13 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 - The system checks: an error when `rest_framework` or `rest_framework.authtoken` isn't
   installed, and when `coldfront.plugins.api` is.
 - Plugin extensions with fake extensions registered for the test: each kind's routes under
-  every prefix, the access rules (the person, superusers, service accounts, ColdFront's project
-  and allocation page rules, a permission an extension adds), `ExtensionNotFound` and
+  every prefix, a missing person, project or allocation a 404, `allows()` returning `False` the
+  same 404 (and the extension's `summary` not called), `ExtensionNotFound` and
   `ExtensionUnavailable` becoming 404 and 503, an unknown name a 404, a name clashing with the
-  API's routes a system check error, logging, and the discovery list. The storage extension's
-  own tests (the VAST lookup, with a fake VAST client that filters as VAST does) live in the
+  API's routes a system check error, logging, and the discovery list with versions and
+  `deprecated`. The registry's own tests, and those of `can_view_project` and
+  `can_view_allocation`, live in coldfront-utils. The storage extensions' tests (their
+  `allows()`, the VAST lookup with a fake VAST client that filters as VAST does) live in the
   storage plugin.
 - Allocation usage: a VAST allocation on each of two instances asked of its own instance, a
   TrueNAS allocation read from stored attributes with no call out, a non-storage allocation and
@@ -817,16 +866,8 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 
 ## Open questions
 
-Open as of 2026-11-16:
+Open as of 2026-11-17:
 
-- **Plugin extensions:** the design in [Plugin extensions](#plugin-extensions) is to be reviewed
-  before it's built, with its own open questions: how an extension's data shape is versioned
-  (leaning towards each extension returning its own `version`), the module's name in
-  `coldfront_utils`, and whether summaries are paginated.
-- **Who may look up someone else's storage:** proposed as superusers and service accounts only,
-  since ColdFront has no permission covering home folders; to be confirmed. Under the extension
-  design that's the default for every person extension, which the storage extension could widen
-  with `opened_by`.
 - **Per-folder usage inside a home** (top-level folders with their sizes): VAST can't give it
   accurately and close to live (vast-api-client's `docs/vast-usage-findings.md`). The choice is
   between a background `du` service on the cluster (live), Starfish (daily, if it scans
@@ -836,8 +877,15 @@ Open as of 2026-11-16:
 - **Phase 4's VAST usage field** (`used_capacity` or `used_effective_capacity` on a directory
   quota), under [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage), "Still to check".
 
-Answered 2026-11-02 (the first three here on 2026-11-16) and written into
-[Decisions](#decisions) and the endpoint sections:
+Answered 2026-11-02 (the first three here on 2026-11-16, the extension ones 2026-11-17) and
+written into [Decisions](#decisions), [Plugin extensions](#plugin-extensions) and the endpoint
+sections:
+
+- Plugin extensions: the registry is in `coldfront_utils.api_extensions`; each extension decides
+  who sees its content with `allows()`, and plugins define their own permissions; each extension
+  has its own `version`, a breaking change being a new name; summaries aren't paginated.
+- Someone else's storage: the storage extension's rule, the person themselves, superusers and
+  holders of `storage.view_any_storage`.
 
 - `PLUGIN_API` goes off and the API is a new plugin, `rest_api`, mounted at
   `/api/v2/` (also `/api/latest/` and `/api/`), with ColdFront's API counting as v1. Nobody
