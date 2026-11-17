@@ -27,8 +27,7 @@ dependencies = [
     "djangorestframework>=3.16.0",
     "django-filter>=25.1",
     # api_extensions: plugins register what they serve here, so the API never imports them.
-    # On main until coldfront-utils 0.4.0 is tagged; then the tag.
-    "coldfront-utils@git+https://github.com/Tufts-Technology-Services/coldfront-utils.git@main",
+    "coldfront-utils@git+https://github.com/Tufts-Technology-Services/coldfront-utils.git@v0.4.0",
 ]
 
 [project.urls]
