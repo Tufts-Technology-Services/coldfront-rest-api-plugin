@@ -3,7 +3,7 @@
 import pytest
 from django.apps import apps
 
-from rest_api.checks import check_installed_apps
+from rest_api.checks import check_extension_names, check_installed_apps
 
 
 def error_ids():
@@ -48,3 +48,52 @@ def test_the_check_is_registered():
     from django.core import checks
 
     assert check_installed_apps in checks.registry.registry.get_checks()
+
+
+# rest_api.E003: an extension one of the API's own routes hides
+
+
+@pytest.fixture
+def fresh_registry(monkeypatch):
+    from coldfront_utils.api_extensions import extensions
+
+    monkeypatch.setattr(extensions, "_registry", {})
+
+
+def register_extension_named(base, name):
+    """Register a minimal extension of base's kind under name."""
+    from coldfront_utils.api_extensions import register_api_extension
+
+    body = {
+        "name": name,
+        "description": "Sample",
+        "allows": lambda self, target, caller: True,
+        "summary": lambda self, target, caller: {},
+    }
+    return register_api_extension(type(f"{name.title()}Extension", (base,), body))
+
+
+def test_extensions_with_names_of_their_own_pass(fresh_registry):
+    from coldfront_utils.api_extensions import AllocationExtension, PersonExtension, ProjectExtension
+
+    register_extension_named(PersonExtension, "storage")
+    register_extension_named(ProjectExtension, "projects")
+    register_extension_named(AllocationExtension, "usage")
+
+    assert check_extension_names(None) == []
+
+
+def test_a_person_extension_named_projects_is_an_error(fresh_registry):
+    from coldfront_utils.api_extensions import PersonExtension
+
+    register_extension_named(PersonExtension, "projects")
+
+    errors = check_extension_names(None)
+
+    assert [error.id for error in errors] == ["rest_api.E003"]
+    assert "ProjectsExtension" in errors[0].msg
+    assert "users/<username>/projects/" in errors[0].msg
+
+
+def test_nothing_registered_passes(fresh_registry):
+    assert check_extension_names(None) == []

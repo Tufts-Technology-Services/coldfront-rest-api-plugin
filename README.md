@@ -7,8 +7,9 @@ of a person's home and scratch, and live usage for storage allocations.
 It replaces ColdFront's own API plugin (`PLUGIN_API`), which has no filters or pagination and
 returns private attributes to anyone who can see the project.
 
-**Status:** the projects and allocations endpoints are built; storage is to come. The
-design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.md).
+**Status:** the projects and allocations endpoints are built, and so are the routes plugins serve
+their own data through ("Plugin extensions" below); storage is to come, as the storage plugin's
+extension. The design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.md).
 
 ## Endpoints
 
@@ -22,6 +23,8 @@ design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.m
   (an id) and `username` (an Active allocation user or the project's PI). Paginated as above.
 - `GET /api/v2/allocations/<id>/`: one allocation, for anyone ColdFront's allocation page would
   show it to; a 404 for anyone else.
+- `GET /api/v2/extensions/`: the plugin extensions this deployment serves (below), by kind, each
+  with its name, description, version and whether it's deprecated.
 
 Every endpoint is also served at `/api/latest/...` and at `/api/...` with no version, both of
 which follow the newest version: today, v2. A system that mustn't break when a v3 arrives should
@@ -32,6 +35,28 @@ about anyone, as can holders of ColdFront's `project.can_view_all_projects` (for
 `allocation.can_view_all_allocations` (for allocations), and service accounts with the API's
 `rest_api.view_any_person`. The staff flag alone isn't enough. For anyone else, another person's
 username is a 404. Only superusers see private attributes.
+
+### Plugin extensions
+
+Plugins serve their own data through the API by registering an extension with
+`coldfront_utils.api_extensions` (see that package's README). Neither imports the other. The API
+serves each one at
+
+- `GET /api/v2/users/<username>/<name>/` and `.../<name>/<key>/`, for a person,
+- `GET /api/v2/projects/<id>/<name>/` and `.../<name>/<key>/`, for a project,
+- `GET /api/v2/allocations/<id>/<name>/` and `.../<name>/<key>/`, for an allocation,
+
+under every prefix. The extension decides who sees its content, with permissions its plugin
+defines; the rules above are only for the API's own endpoints. A person, project or allocation that
+doesn't exist, and one the extension doesn't allow the caller, are the same 404, as is a name no
+extension has. An extension that can't reach its data is a 503 with a message; one that fails is a
+500, logged to `rest_api.extensions`. Service accounts' lookups are logged as for the API's own
+endpoints, so a service account that should read an extension needs its plugin's permission as well
+as `rest_api.view_any_person`.
+
+Each extension's response carries its own `version`. A breaking change to an extension arrives under
+a new name (`storage-v2`), and the old one is listed as deprecated at `/api/v2/extensions/` until it
+goes.
 
 ### Your own token
 
@@ -94,6 +119,10 @@ REST_FRAMEWORK = {
 and mounts `rest_api.urls` at `api/`. The endpoints are under `/api/v2/` (ColdFront's built-in
 API, which used to be at `/api/`, counts as v1), `/api/latest/` and `/api/`, and the token page
 is at `/api/token/`.
+
+The system checks stop `migrate` and `check` when a DRF app is missing (`rest_api.E001`), when
+ColdFront's own API is installed (`rest_api.E002`), and when a plugin registers an extension that one
+of the API's own routes would hide, such as a person extension named `projects` (`rest_api.E003`).
 
 ## Development
 

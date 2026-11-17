@@ -816,7 +816,8 @@ it, along with the usual in-memory SQLite and MD5 hasher.
    ColdFront's permissions and project statuses and the projects endpoint's `?status=`.
 3. **Plugin extensions, then storage areas:** the vast-api-client user quota calls (built and
    tried against the hpc VMS on 2026-11-16, by username, by UID and across pages; merged). Then
-   [plugin extensions](#plugin-extensions) in coldfront-utils and the API plugin, and the
+   [plugin extensions](#plugin-extensions) in coldfront-utils (built 2026-11-17 on its
+   `api-extensions` branch) and the API plugin (built 2026-11-17 on `extension-routes`), and the
    storage plugin's `storage` extension, which takes over the lookup first built in the API
    plugin on the `storage-areas` branch. Home and scratch are both ready
    ([Scratch](#scratch)). To deploy: coldfront-utils, the storage plugin and the API plugin
