@@ -97,7 +97,8 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   together. Each prefix is its own URL namespace
   (`rest_api:v2`, `rest_api:latest`, `rest_api:unversioned`), and a page's `next` and
   `previous` links stay on the prefix the caller used.
-- **Read-only.** Every view is a `ReadOnlyModelViewSet` or a `GET`-only `APIView`.
+- **Read-only.** Every view is a `ReadOnlyModelViewSet` or a `GET`-only `APIView`. Writes through
+  plugin extensions are planned, not decided, in [api-writes-plan.md](api-writes-plan.md).
 - **People are named by username** (the UTLN), the same key Grouper, AD and the cluster use.
 - **Superusers see private attributes; everyone else sees public ones only** (decided
   2026-11-02; superusers rather than staff decided 2026-11-16). This is the rule ColdFront's web
@@ -838,7 +839,8 @@ it, along with the usual in-memory SQLite and MD5 hasher.
    `/allocations/<id>/usage/`. Needs the allocations endpoint (phase 2) and the VAST usage
    field settled (see "Still to check" under
    [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage)).
-5. **Later:** an OpenAPI schema (drf-spectacular isn't installed today).
+5. **Later:** an OpenAPI schema (drf-spectacular isn't installed today), and writes through plugin
+   extensions ([api-writes-plan.md](api-writes-plan.md)).
 
 ## Testing
 
