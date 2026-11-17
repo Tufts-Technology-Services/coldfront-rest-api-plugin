@@ -4,6 +4,7 @@ System checks for the apps the API needs, so a deployment that's missing them st
 """
 
 from django.apps import apps
+from django.conf import settings
 from django.core import checks
 
 # ColdFront installs these only with PLUGIN_API, which is off where this plugin runs
@@ -33,4 +34,46 @@ def check_installed_apps(app_configs, **kwargs):
                 id="rest_api.E002",
             )
         )
+    return errors
+
+
+def storage_area_error(message):
+    return checks.Error(
+        message,
+        hint=(
+            "USER_STORAGE_AREAS maps each area to the STORAGE_PLUGIN_CLIENTS entry it lives on and its "
+            'directory quota there: {"home": {"client": "hpc", "path": "/homedir"}}.'
+        ),
+        id="rest_api.E003",
+    )
+
+
+@checks.register()
+def check_user_storage_areas(app_configs, **kwargs):
+    """E003 for each way USER_STORAGE_AREAS is malformed, if it's set. Unset, there are no storage areas."""
+    areas = getattr(settings, "USER_STORAGE_AREAS", None)
+    if areas is None:
+        return []
+    if not isinstance(areas, dict):
+        return [storage_area_error("USER_STORAGE_AREAS must be a dict of areas.")]
+    client_keys = {entry.get("client_key") for entry in getattr(settings, "STORAGE_PLUGIN_CLIENTS", []) or []}
+    errors = []
+    for name, area in areas.items():
+        if not name or "/" in str(name):
+            # the name is a URL segment: storage/<area>/
+            errors.append(storage_area_error(f"The storage area name {name!r} must be non-empty, with no slash."))
+        elif not isinstance(area, dict):
+            errors.append(storage_area_error(f"USER_STORAGE_AREAS[{name!r}] must be a dict with a client and a path."))
+        elif not area.get("client"):
+            errors.append(storage_area_error(f"USER_STORAGE_AREAS[{name!r}] names no client."))
+        elif not str(area.get("path") or "").startswith("/"):
+            errors.append(
+                storage_area_error(f"USER_STORAGE_AREAS[{name!r}] needs an absolute path, not {area.get('path')!r}.")
+            )
+        elif area["client"] not in client_keys:
+            errors.append(
+                storage_area_error(
+                    f"USER_STORAGE_AREAS[{name!r}] names client {area['client']!r}, which isn't in STORAGE_PLUGIN_CLIENTS."
+                )
+            )
     return errors

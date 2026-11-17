@@ -48,3 +48,64 @@ def test_the_check_is_registered():
     from django.core import checks
 
     assert check_installed_apps in checks.registry.registry.get_checks()
+
+
+# USER_STORAGE_AREAS: optional, but well formed if set
+
+
+def storage_error_messages(settings, areas, clients=({"client_key": "hpc"},)):
+    from rest_api.checks import check_user_storage_areas
+
+    settings.USER_STORAGE_AREAS = areas
+    settings.STORAGE_PLUGIN_CLIENTS = list(clients)
+    errors = check_user_storage_areas(None)
+    assert {error.id for error in errors} <= {"rest_api.E003"}
+    return [error.msg for error in errors]
+
+
+def test_no_storage_areas_is_fine(settings):
+    from rest_api.checks import check_user_storage_areas
+
+    assert check_user_storage_areas(None) == []
+
+
+def test_well_formed_storage_areas_are_fine(settings):
+    areas = {"home": {"client": "hpc", "path": "/homedir"}, "scratch": {"client": "hpc", "path": "/scratch"}}
+
+    assert storage_error_messages(settings, areas) == []
+
+
+@pytest.mark.parametrize(
+    "areas, mentioned",
+    [
+        (["home"], "dict"),
+        ({"home": "/homedir"}, "home"),
+        ({"home": {"path": "/homedir"}}, "client"),
+        ({"home": {"client": "hpc"}}, "path"),
+        ({"home": {"client": "hpc", "path": "homedir"}}, "path"),
+        ({"home": {"client": "rstore", "path": "/homedir"}}, "rstore"),
+        ({"home/x": {"client": "hpc", "path": "/homedir"}}, "home/x"),
+    ],
+    ids=[
+        "not a dict",
+        "an area that isn't a dict",
+        "no client",
+        "no path",
+        "a relative path",
+        "an unknown client",
+        "a name with a slash",
+    ],
+)
+def test_a_malformed_storage_area_is_an_error(settings, areas, mentioned):
+    messages = storage_error_messages(settings, areas)
+
+    assert len(messages) == 1
+    assert mentioned in messages[0]
+
+
+def test_the_storage_check_is_registered():
+    from django.core import checks
+
+    from rest_api.checks import check_user_storage_areas
+
+    assert check_user_storage_areas in checks.registry.registry.get_checks()

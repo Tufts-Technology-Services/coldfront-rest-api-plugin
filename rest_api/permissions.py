@@ -31,3 +31,8 @@ def is_service_account(user):
 def sees_private_attributes(user):
     """Only superusers see private attributes, as on ColdFront's web pages."""
     return user.is_superuser
+
+
+def can_view_all_storage(user):
+    """Superusers and service accounts: ColdFront has no permission covering people's home folders."""
+    return user.is_superuser or user.has_perm(VIEW_ANY_PERSON)

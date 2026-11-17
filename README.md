@@ -7,7 +7,8 @@ of a person's home and scratch, and live usage for storage allocations.
 It replaces ColdFront's own API plugin (`PLUGIN_API`), which has no filters or pagination and
 returns private attributes to anyone who can see the project.
 
-**Status:** the projects and allocations endpoints are built; storage is to come. The
+**Status:** the projects, allocations and storage area endpoints are built; live allocation usage
+is to come. The
 design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.md).
 
 ## Endpoints
@@ -22,6 +23,12 @@ design, decisions and phases are in [docs/rest-api-plan.md](docs/rest-api-plan.m
   (an id) and `username` (an Active allocation user or the project's PI). Paginated as above.
 - `GET /api/v2/allocations/<id>/`: one allocation, for anyone ColdFront's allocation page would
   show it to; a 404 for anyone else.
+- `GET /api/v2/users/<username>/storage/`: the person's storage areas (home, scratch), each with
+  the URL to ask about it. Asks no storage system.
+- `GET /api/v2/users/<username>/storage/<area>/`: the person's quota and usage in one area, from
+  their VAST user quota: limits, `used_bytes`, whether the limits are the default or an override,
+  and when VAST last recalculated usage (every minute or two). A 503 when the storage system
+  can't answer, or when `STORAGE_LOG_ONLY` is on.
 
 Every endpoint is also served at `/api/latest/...` and at `/api/...` with no version, both of
 which follow the newest version: today, v2. A system that mustn't break when a v3 arrives should
@@ -30,8 +37,9 @@ call `/api/v2/`.
 Who sees what follows ColdFront's own rules. Anyone can ask about themselves. Superusers can ask
 about anyone, as can holders of ColdFront's `project.can_view_all_projects` (for projects) or
 `allocation.can_view_all_allocations` (for allocations), and service accounts with the API's
-`rest_api.view_any_person`. The staff flag alone isn't enough. For anyone else, another person's
-username is a 404. Only superusers see private attributes.
+`rest_api.view_any_person`. The staff flag alone isn't enough. Someone else's storage is open only
+to superusers and service accounts, since ColdFront has no permission that covers home folders.
+For anyone else, another person's username is a 404. Only superusers see private attributes.
 
 ### Your own token
 
@@ -94,6 +102,20 @@ REST_FRAMEWORK = {
 and mounts `rest_api.urls` at `api/`. The endpoints are under `/api/v2/` (ColdFront's built-in
 API, which used to be at `/api/`, counts as v1), `/api/latest/` and `/api/`, and the token page
 is at `/api/token/`.
+
+For the storage endpoints, `USER_STORAGE_AREAS` names each area, the storage plugin client it
+lives on (an entry in the storage plugin's `STORAGE_PLUGIN_CLIENTS`, read for VAST's host and
+credentials) and its directory quota's path there:
+
+```python
+USER_STORAGE_AREAS = {
+    "home": {"client": "hpc", "path": "/homedir"},
+    "scratch": {"client": "hpc", "path": "/scratch"},
+}
+```
+
+Unset, there are no areas. VAST is asked only if `STORAGE_LOG_ONLY` (an environment variable, read
+as the storage plugin reads it) is set false; it's on by default.
 
 ## Development
 
