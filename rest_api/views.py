@@ -6,7 +6,6 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.generics import ListAPIView, RetrieveAPIView
-from rest_framework.permissions import IsAuthenticated
 
 from coldfront.core.allocation.models import Allocation, AllocationAttribute, AllocationPermission
 from coldfront.core.project.models import Project, ProjectAttribute, ProjectUser
@@ -15,6 +14,7 @@ from coldfront.core.resource.models import Resource
 from rest_api.filters import LISTED_PROJECT_STATUSES, AllocationFilter, UserProjectFilter
 from rest_api.pagination import ApiPagination
 from rest_api.permissions import (
+    CanUseApi,
     can_view_all_allocations,
     can_view_all_projects,
     is_service_account,
@@ -54,7 +54,7 @@ class UserProjectsView(PersonLookupMixin, ListAPIView):
     New and Active ones unless ?status= names others (UserProjectFilter), as in ColdFront.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanUseApi]
     pagination_class = ApiPagination
     serializer_class = UserProjectSerializer
     filter_backends = [DjangoFilterBackend]
@@ -124,7 +124,7 @@ class AllocationListView(ListAPIView):
     "show all allocations" does, whatever its project's status.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanUseApi]
     pagination_class = ApiPagination
     serializer_class = AllocationSerializer
     filter_backends = [DjangoFilterBackend]
@@ -150,7 +150,7 @@ class AllocationDetailView(RetrieveAPIView):
     Anyone else gets the same 404 as for an allocation that doesn't exist.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanUseApi]
     serializer_class = AllocationSerializer
 
     def get(self, request, *args, **kwargs):

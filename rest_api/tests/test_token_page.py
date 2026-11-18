@@ -3,8 +3,7 @@
 import logging
 
 import pytest
-from django.template.loader import render_to_string
-from django.test import Client, RequestFactory
+from django.test import Client
 from django.urls import reverse
 from rest_framework.authtoken.models import Token
 
@@ -212,13 +211,7 @@ def test_revoking_nothing_isnt_logged(signed_in, token_log):
 # The profile page's row, which the site's user_profile.html includes
 
 
-def render_profile_row(viewer, viewed_user):
-    request = RequestFactory().get("/user/user-profile/")
-    request.user = viewer
-    return render_to_string("rest_api/profile_token_row.html", {"viewed_user": viewed_user, "request": request}).strip()
-
-
-def test_profile_row_with_a_token(smith):
+def test_profile_row_with_a_token(smith, render_profile_row):
     Token.objects.create(user=smith, key=KEY)
 
     row = render_profile_row(smith, smith)
@@ -229,14 +222,14 @@ def test_profile_row_with_a_token(smith):
     assert f'href="{reverse("rest_api:token")}"' in row
 
 
-def test_profile_row_without_a_token(smith):
+def test_profile_row_without_a_token(smith, render_profile_row):
     row = render_profile_row(smith, smith)
 
     assert "None" in row
     assert f'href="{reverse("rest_api:token")}"' in row
 
 
-def test_profile_row_is_only_on_your_own_profile(smith, make_user):
+def test_profile_row_is_only_on_your_own_profile(smith, make_user, render_profile_row):
     Token.objects.create(user=smith, key=KEY)
 
     assert render_profile_row(make_user("jones01", superuser=True), smith) == ""

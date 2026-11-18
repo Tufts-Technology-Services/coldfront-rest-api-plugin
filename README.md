@@ -30,7 +30,17 @@ Every endpoint is also served at `/api/latest/...` and at `/api/...` with no ver
 which follow the newest version: today, v2. A system that mustn't break when a v3 arrives should
 call `/api/v2/`.
 
-Who sees what follows ColdFront's own rules. Anyone can ask about themselves. Superusers can ask
+### Who can use it
+
+Only people allowed to: holders of `rest_api.use_api` ("Can use the REST API" in the admin), which
+the plugin's migrations give to a group, `rest_api_users`. Admins add people to that group.
+Superusers are allowed without it. Anyone else gets a 403 from every endpoint, even with a token,
+and from the token page, and their profile shows no token row. Taking someone out of the group
+shuts out their token at once; it isn't deleted, and works again if they're added back.
+
+### Who sees what
+
+Who sees what follows ColdFront's own rules. Anyone allowed to use the API can ask about themselves. Superusers can ask
 about anyone, as can holders of ColdFront's `project.can_view_all_projects` (for projects) or
 `allocation.can_view_all_allocations` (for allocations), and service accounts with the API's
 `rest_api.view_any_person`. The staff flag alone isn't enough. For anyone else, another person's
@@ -62,7 +72,7 @@ goes.
 
 ### Your own token
 
-Anyone signed in to ColdFront can make a token for themselves at `/api/token/`. The full token is
+Anyone allowed to use the API (above) can make a token for themselves at `/api/token/`. The full token is
 shown once, right after it's made; after that the page shows only its last six characters, with
 buttons to regenerate or revoke it. Making, replacing and revoking a token are logged at INFO to
 the `rest_api.tokens` logger. To link to it from the user profile page, the site's
@@ -72,13 +82,13 @@ the `rest_api.tokens` logger. To link to it from the user profile page, the site
 {% include "rest_api/profile_token_row.html" %}
 ```
 
-The row appears only on your own profile.
+The row appears only on your own profile, and only if you're allowed to use the API.
 
 ### Service accounts
 
 A system calling the API gets an ordinary user, with no staff flag and an unusable password, that
-holds `rest_api.view_any_person` ("Can look up any person through the REST API" in the admin),
-and a token an admin issues:
+is in the `rest_api_users` group, holds `rest_api.view_any_person` ("Can look up any person
+through the REST API" in the admin), and has a token an admin issues:
 
 ```bash
 coldfront drf_create_token <username>

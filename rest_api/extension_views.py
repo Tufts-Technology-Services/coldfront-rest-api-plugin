@@ -18,14 +18,13 @@ from coldfront_utils.api_extensions import (
 )
 from django.contrib.auth.models import User
 from django.http import Http404
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from coldfront.core.allocation.models import Allocation
 from coldfront.core.project.models import Project
 
-from rest_api.permissions import is_service_account
+from rest_api.permissions import CanUseApi, is_service_account
 
 # who looked up whom, for service accounts, as for the API's own endpoints
 lookup_logger = logging.getLogger("rest_api.lookups")
@@ -50,7 +49,7 @@ class ExtensionView(APIView):
     lookup of it.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanUseApi]
     # "person", "project" or "allocation"
     kind = None
 
@@ -137,7 +136,7 @@ class ExtensionListView(APIView):
     whether it's deprecated, so a caller can see what this deployment serves.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanUseApi]
 
     def get(self, request, *args, **kwargs):
         return Response(

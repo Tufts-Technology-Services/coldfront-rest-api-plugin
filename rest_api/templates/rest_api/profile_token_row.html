@@ -1,10 +1,11 @@
 {% comment %}
 A row for the user profile page's table, about the API token of the person viewing their own
 profile. The site's user/user_profile.html includes it inside its profile_contents block:
-{% include "rest_api/profile_token_row.html" %}. It shows nothing on anyone else's profile, and
-only the token's last six characters on your own.
+{% include "rest_api/profile_token_row.html" %}. It shows nothing on anyone else's profile, nor
+to anyone not allowed to use the API (rest_api.use_api), and only the token's last six characters
+on your own.
 {% endcomment %}
-{% if viewed_user == request.user %}
+{% if viewed_user == request.user and perms.rest_api.use_api %}
   <tr>
     <th scope="row">API Token:</th>
     <td>

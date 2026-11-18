@@ -2,14 +2,14 @@
 The API token page: a signed-in person creates, replaces or revokes their own DRF token.
 
 These are web pages, not API views: they use the browser session and CSRF like the rest of
-ColdFront. The full token is shown once, on the page after it is made, and only its last six
+ColdFront. Only people allowed to use the API get them. The full token is shown once, on the page after it is made, and only its last six
 characters after that. See docs/rest-api-plan.md.
 """
 
 import logging
 
 from django.contrib import messages
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import PermissionRequiredMixin
 from django.db import transaction
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -17,8 +17,21 @@ from django.views import View
 from django.views.generic import TemplateView
 from rest_framework.authtoken.models import Token
 
+from rest_api.permissions import USE_API
+
 # who made, replaced or revoked their token; an audit trail, like rest_api.lookups
 token_logger = logging.getLogger("rest_api.tokens")
+
+
+class ApiUserRequiredMixin(PermissionRequiredMixin):
+    """
+    Only people allowed to use the API (rest_api.use_api, from the rest_api_users group, or
+    superusers) may see or change their token. Anyone else signed in gets a 403; anyone signed out
+    is sent to sign in.
+    """
+
+    permission_required = USE_API
+
 
 # Where a new token waits for the page that shows it once. Not a flash message: Django may keep
 # those in a cookie.
@@ -30,7 +43,7 @@ def key_ending(token):
     return token.key[-6:]
 
 
-class TokenPageView(LoginRequiredMixin, TemplateView):
+class TokenPageView(ApiUserRequiredMixin, TemplateView):
     """The caller's token: whether they have one, its end and date, and the buttons to change it."""
 
     template_name = "rest_api/token.html"
@@ -50,7 +63,7 @@ class TokenPageView(LoginRequiredMixin, TemplateView):
         return context
 
 
-class RegenerateTokenView(LoginRequiredMixin, View):
+class RegenerateTokenView(ApiUserRequiredMixin, View):
     """Replace the caller's token with a new one (or create their first), then show it once."""
 
     def post(self, request):
@@ -70,7 +83,7 @@ class RegenerateTokenView(LoginRequiredMixin, View):
         return redirect("rest_api:token")
 
 
-class RevokeTokenView(LoginRequiredMixin, View):
+class RevokeTokenView(ApiUserRequiredMixin, View):
     """Delete the caller's token, if they have one."""
 
     def post(self, request):

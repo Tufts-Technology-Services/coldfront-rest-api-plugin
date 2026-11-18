@@ -113,6 +113,11 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
   `allocation.can_view_all_allocations`. The staff flag alone isn't enough, as in ColdFront.
   (This replaces a decision earlier the same day that staff could look up anyone.) Seeing
   anyone's data and seeing private attributes stay separate: only superusers get the second.
+- **Only people allowed to use the API can, through a group** (decided 2026-11-18, before the
+  production deploy). The API's own `rest_api.use_api` ("Can use the REST API"), carried by a
+  group `rest_api_users` that migration 0002 makes, is needed for every endpoint, whatever the
+  token, and for the token page; superusers have it anyway. See
+  [Who can use the API](#who-can-use-the-api).
 - **A service account can ask about anyone, but only with a dedicated permission, and never
   sees private attributes** (decided 2026-11-02). See [Who can see what](#who-can-see-what).
 - **New and Active projects, as in ColdFront** (decided 2026-11-16, replacing Active only from
@@ -124,11 +129,31 @@ replaces the 2026-11-02 decision to keep `PLUGIN_API` on and patch its serialize
 - **Paginated.** Lists use DRF's `PageNumberPagination`, 100 per page by default and up to
   1000 with `?page_size=`. The allocation list in particular runs to thousands of rows.
 
+## Who can use the API
+
+Decided 2026-11-18. Before anything in [Who can see what](#who-can-see-what), a caller needs
+`rest_api.use_api`. Admins grant it by adding people to the `rest_api_users` group.
+
+- **The permission is on `ApiAccess`,** beside `view_any_person`, so it adds no table either.
+  Migration 0002 makes the group and gives it the permission. It makes the permission itself,
+  since Django otherwise makes permissions only after every migration has run. Re-running it
+  changes nothing, and reversing it leaves the group and its members.
+- **Every API view checks it** with `rest_api.permissions.CanUseApi`, in place of DRF's
+  `IsAuthenticated`. A test walks the URLconf so a new view can't leave it out. No credentials is
+  still a 401. Credentials without the permission are a 403, "Your account doesn't have access to
+  the REST API.", before any lookup, so it says nothing about who or what exists.
+- **The token page, regenerate and revoke** need it too (a 403 when signed in, the sign-in page
+  when not), and the profile row is hidden without it.
+- **Leaving the group shuts out an existing token at once.** The token stays; it works again if
+  the person is added back.
+- **Superusers don't need the group** (Django's `has_perm` is True for them). Service accounts do:
+  `view_any_person` alone opens nothing.
+
 ## Who can see what
 
 | Caller | Own data | Anyone's projects | Anyone's allocations | Private attributes |
 | --- | --- | --- | --- | --- |
-| Any authenticated user, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no |
+| Anyone allowed to use the API, staff included | yes | no: 404 for someone else's username, not 403, so the API doesn't confirm who exists | no | no |
 | Superusers | yes | yes | yes | yes |
 | Holders of ColdFront's `project.can_view_all_projects` | yes | yes | no | no |
 | Holders of ColdFront's `allocation.can_view_all_allocations` | yes | no | yes | no |
@@ -174,7 +199,8 @@ Added 2026-11-16. v1 had a token section on the user profile page; the plugin re
 page of its own at `/api/token/`, outside the version prefixes since it is a web page, not part
 of the API.
 
-- **Anyone signed in can make a token for themselves** (decided 2026-11-16), as in v1. A
+- **Anyone allowed to use the API can make a token for themselves** (decided 2026-11-16, as in
+  v1, for anyone signed in; narrowed 2026-11-18 to holders of `rest_api.use_api`). A
   person's token reads only what they can see signed in, so it is no wider than their session.
   Service account tokens still come from an admin.
 - **The full token is shown once** (decided 2026-11-16), on the page right after it is created or
@@ -189,7 +215,8 @@ of the API.
 - **The profile page links to it** (decided 2026-11-16): a row with the token's last six
   characters, or None, and a Manage button. The plugin provides the row,
   `rest_api/profile_token_row.html`. The Tufts branding replaces `user/user_profile.html`, so it
-  includes the row in its `profile_contents` block; the row shows only on your own profile.
+  includes the row in its `profile_contents` block; the row shows only on your own profile, and
+  only to people allowed to use the API.
 
 ## Plugin extensions
 
@@ -789,8 +816,8 @@ coldfront-rest-api-plugin/
         __init__.py
         apps.py          # AppConfig; registers the system checks
         checks.py        # DRF and authtoken installed, coldfront.plugins.api not
-        models.py        # ApiAccess: unmanaged, no table; carries view_any_person
-        migrations/      # creates ApiAccess's permission, not a table
+        models.py        # ApiAccess: unmanaged, no table; carries use_api and view_any_person
+        migrations/      # ApiAccess's permissions, not a table; 0002 makes rest_api_users
         permissions.py   # who sees everyone's projects or allocations, ColdFront's rules
         serializers.py   # attribute serializers: private ones for superusers only
         filters.py       # AllocationFilter (django-filter FilterSet)
@@ -845,6 +872,10 @@ it, along with the usual in-memory SQLite and MD5 hasher.
 ## Testing
 
 - DRF's `APIClient` with `force_authenticate`, in `rest_api/tests/test_*.py`.
+- Access (`test_access.py`): every API route under every prefix is a 403 for a token without
+  `use_api`, a service account included; group members and superusers get in; leaving the group
+  shuts out a token; every API view in the URLconf has `CanUseApi`; the token page and the
+  profile row refuse people without it.
 - A permission matrix per endpoint: the person themselves, another user (404), staff without a
   permission (404), superusers, holders of the matching ColdFront `can_view_all_*` permission
   (and of the other one, who get a 404), and a service account with and without
