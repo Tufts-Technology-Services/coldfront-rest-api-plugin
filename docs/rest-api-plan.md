@@ -717,95 +717,109 @@ The storage plugin already records it:
   `truenas`. Each allocation is asked of its own instance.
 - That client config's `native_path_attribute_name` names the allocation attribute holding the
   path on the storage system (`vast_path` for both VAST instances).
-- **Which kind of system a client is** isn't recorded in its config today, only implied by the
-  handler's task names (`storage.vast...` vs `storage.truenas...`). The storage plugin should get
-  an explicit `"type": "vast"` / `"truenas"` in each `STORAGE_PLUGIN_CLIENTS` entry
-  (coldfront-ansible's Tufts settings) rather than parse task names. The storage areas use it
-  too.
+- **Which kind of system a client is** is each `STORAGE_PLUGIN_CLIENTS` entry's `"type"`:
+  `vast`, `truenas` or `starfish` (decided 2026-11-18, replacing parsing task names). A client
+  with no known type is a 503, and the storage plugin's system check warns (`storage.W003`).
+  coldfront-ansible's Tufts settings give each entry its type.
 
-#### VAST allocations: live
+#### One shape for every source
 
-One `GET /quotas/?path=<vast_path>` to that allocation's VAST instance:
+Decided 2026-11-18, replacing separate VAST and TrueNAS shapes: every answer has the same keys,
+null where a source has nothing, built from one dataclass (`storage.allocation_usage.StorageUsage`)
+that each source fills in. VAST's own field names and words never reach callers, and the answer
+doesn't say which system it came from (decided 2026-11-18): the dates say how fresh it is.
 
 ```json
 {
+  "extension": "usage",
+  "version": 1,
   "allocation": 9031,
   "project": {"id": 412, "title": "Ocean Modelling"},
   "resource": "Tier 3 Storage",
-  "source": "vast",
-  "soft_limit_bytes": 10000000000000,
-  "hard_limit_bytes": 10000000000000,
+  "path": "/cluster/tufts/ocean",
+  "limit_bytes": 10000000000000,
   "used_bytes": 6200000000000,
-  "state": "OK",
-  "retrieved_at": "2026-11-03T14:05:12Z",
+  "state": "ok",
+  "measured_at": "2026-11-18T19:05:12.402113+00:00",
+  "limit_reported_at": "2026-11-18T19:05:12.402113+00:00",
   "stored_used_bytes": 6150000000000,
-  "usage_reported_at": "2026-11-03T03:00:00Z"
+  "stored_usage_reported_at": "2026-11-03T03:00:00-05:00"
 }
 ```
 
-- **Limits:** `soft_limit` and `hard_limit`, both reported (either can be null). The storage
-  plugin's batch task records `soft_limit`, falling back to `hard_limit`, as the allocation's
-  quota; callers wanting the one ColdFront shows should do the same.
+- **One limit, `limit_bytes`** (decided 2026-11-18): the soft limit if there is one, else the hard
+  limit, as the storage plugin's batch task records the allocation's quota. A limit of 0 is no
+  limit (null): VAST's batch task and TrueNAS (ZFS) both record no quota as 0.
+- **`state`** is the API's own: `ok`, `over_limit` (`used_bytes` above `limit_bytes`), or null
+  when either is null.
+- **`measured_at`** is when `used_bytes` was measured; **`limit_reported_at`** when the limit was
+  read.
+- **`stored_used_bytes`** and **`stored_usage_reported_at`** are ColdFront's own figure, the
+  allocation's `reported_usage_bytes` and `usage_report_date` from the Starfish usage task, as
+  ColdFront's allocation page shows.
+
+#### VAST allocations: live
+
+One `GET /quotas/?path=<vast_path>` to that allocation's VAST instance,
+matching the quota at exactly that path.
+
 - **Usage comes from VAST, not Starfish.** ColdFront's stored usage (`reported_usage_bytes`) is
   written by the Starfish task from a once-a-day snapshot, too stale for this. The directory
-  quota itself reports usage: `used_capacity` or `used_effective_capacity` (see "Still to check"
-  below). Every allocation the storage plugin provisions on VAST gets a directory quota at its
-  path (`add_quota_and_protected_path`), so the quota lookup finds usage too.
-- **`retrieved_at`** is the time of the VAST call. Unlike user quotas, a directory quota carries no
-  "last updated" time; VAST keeps directory quota usage current itself.
-- **Cached for a minute or two per path,** so a dashboard refreshing doesn't hit VAST every time,
-  while still being close to live. Paths are cached per client, so the same path on two
-  instances never collides.
+  quota itself reports usage: `used_bytes` is its `used_capacity` (decided 2026-11-18, as for
+  homes; see "Still to check" below). Every allocation the storage plugin provisions on VAST gets
+  a directory quota at its path (`add_quota_and_protected_path`), so the quota lookup finds usage
+  too.
+- **`measured_at` and `limit_reported_at`** are both the time of the VAST call. Unlike user
+  quotas, a directory quota carries no "last updated" time; VAST keeps directory quota usage
+  current itself.
+- **Cached for two minutes per client and path,** so a dashboard refreshing doesn't hit VAST every
+  time, while still being close to live.
+- **With `STORAGE_LOG_ONLY` on,** nothing is asked: a 503, "Storage lookups are off on this host."
 - **Errors:** the VAST instance unreachable or timing out is a 503, with a short message and never
-  VAST's own error text. A path VAST has no quota for is a 404 with the detail "No quota for this
-  allocation.", so a caller can tell it from an allocation it can't see.
+  VAST's own error text, which is logged. An allocation with no path attribute, or a path VAST has
+  no quota for, is a plain 404, as for an allocation the caller can't see. (The 2026-11-02 plan
+  had a 404 with the detail "No quota for this allocation."; the API turns an extension's
+  `ExtensionNotFound` into a plain 404, so telling them apart would need the API to pass a
+  detail through. Not done.)
 
 #### TrueNAS allocations: stored
 
-TrueNAS has no live source, so the response is ColdFront's stored values, read from the
-allocation's attributes with no call out: `reported_quota_bytes` and `quota_report_date` (written
-by the TrueNAS quota batch task), and `reported_usage_bytes` and `usage_report_date` (written by
-the Starfish usage task, a once-a-day snapshot, which Tufts considers adequate for TrueNAS).
-
-```json
-{
-  "allocation": 8120,
-  "project": {"id": 412, "title": "Ocean Modelling"},
-  "resource": "Tier 2 Storage",
-  "source": "stored",
-  "soft_limit_bytes": null,
-  "hard_limit_bytes": 2000000000000,
-  "used_bytes": 1100000000000,
-  "state": null,
-  "quota_reported_at": "2026-11-03T02:00:00Z",
-  "usage_reported_at": "2026-11-03T03:00:00Z"
-}
-```
+TrueNAS has no live source, so the response is ColdFront's stored values,
+read from the allocation's attributes with no call out (so `STORAGE_LOG_ONLY` doesn't matter):
+`reported_quota_bytes` and `quota_report_date` (written by the TrueNAS quota batch task) give
+`limit_bytes` and `limit_reported_at`; `reported_usage_bytes` and `usage_report_date` (written by
+the Starfish usage task, a once-a-day snapshot, which Tufts considers adequate for TrueNAS) give
+`used_bytes` and `measured_at`, and the same again as `stored_used_bytes` and
+`stored_usage_reported_at`. A value that's missing or not a number is null.
 
 Answering with the stored values, rather than a 404, means a caller can use the one URL for every
-storage allocation; `"source": "stored"` and the report dates tell it how old the numbers are.
+storage allocation; the dates tell it how old the numbers are. The tasks
+store dates in local time with no zone, so they are given the site's `TIME_ZONE` offset.
 
 #### For both
 
-**No paths in the response.** The allocation is identified by its id, project and resource
-name. `vast_path` and `Storage Path` are allocation attributes that may be private, and the
-storage system path is never returned to callers who couldn't see it on the allocations endpoint.
+**The Storage Path, never the system path** (decided 2026-11-18, replacing "no paths"). `path` is
+the allocation's `Storage Path` attribute, the path people use, read for each request (not from
+the VAST cache). If that attribute type is private, only superusers see it and anyone else gets
+null, the API's rule for private attributes, so it is never shown to a caller who couldn't see it
+on the allocations endpoint. The path on the storage system (`vast_path`, `truenas_path`) is never
+returned.
 
-**Still to check:** which VAST usage field to report. On `/homedir` `used_capacity` and
-`used_effective_capacity` were equal. On a project quota where they differ, the field to report
-is the one measured the same way people are billed and told their quota: if quotas are enforced
-on logical size, the logical figure. `GET /quotas/?path=<vast_path>` for one real project
-allocation on each instance (`hpc` and `rstore`) would show both, and comparing them with that
-allocation's Starfish number (logical size, though a day old) shows which is which. Also worth
-confirming: that allocations created before the storage plugin managed VAST also have a
-directory quota at their `vast_path`.
+**Still to check:** that `used_capacity` is the right VAST usage field for project quotas. On
+`/homedir` `used_capacity` and `used_effective_capacity` were equal. On a project quota where they
+differ, the field to report is the one measured the same way people are billed and told their
+quota: if quotas are enforced on logical size, the logical figure. `GET /quotas/?path=<vast_path>`
+for one real project allocation on each instance (`hpc` and `rstore`) would show both, and
+comparing them with that allocation's Starfish number (logical size, though a day old) shows which
+is which. To check before the extension serves p01. Also worth confirming: that allocations
+created before the storage plugin managed VAST also have a directory quota at their `vast_path`.
 
 **ColdFront keeps showing Starfish's usage** (decided 2026-11-02). The live VAST figure is used
 only in this API's responses and is never written to ColdFront: `reported_usage_bytes` stays
 Starfish's, and the VAST quota batch task keeps storing only quotas. So for a VAST allocation the
 API's `used_bytes` and the usage on ColdFront's allocation page can differ, the API being newer.
-Each VAST response therefore also carries the stored Starfish figure, `stored_used_bytes` with
-`usage_reported_at`, so a caller can show the number ColdFront shows, or both.
+Each answer therefore also carries the stored Starfish figure, `stored_used_bytes` with
+`stored_usage_reported_at`, so a caller can show the number ColdFront shows, or both.
 
 ## Layout
 
@@ -863,9 +877,9 @@ it, along with the usual in-memory SQLite and MD5 hasher.
    together through the fork's lock, then `USER_STORAGE_AREAS` in coldfront-ansible's Tufts
    settings, with `STORAGE_LOG_ONLY` off on the hosts that should ask VAST.
 4. **Live allocation usage:** the storage plugin's directory quota lookup, then
-   `/allocations/<id>/usage/`. Needs the allocations endpoint (phase 2) and the VAST usage
-   field settled (see "Still to check" under
-   [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage)).
+   `/allocations/<id>/usage/`. Built 2026-11-18 as the storage plugin's `usage` extension, with
+   `used_capacity`; that field is to be checked on a real project quota before p01 (see "Still to
+   check" under [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage)).
 5. **Later:** an OpenAPI schema (drf-spectacular isn't installed today), and writes through plugin
    extensions ([api-writes-plan.md](api-writes-plan.md)).
 
@@ -919,8 +933,8 @@ Open as of 2026-11-17:
   `/homedir`) and leaving it out (the live total and the folder names from `list_dir`).
 - **Whether `used_capacity` counts apparent or allocated bytes** (`du -sb` or `du -sB1`): they
   differed by 1.5% on one home; compare in exact bytes.
-- **Phase 4's VAST usage field** (`used_capacity` or `used_effective_capacity` on a directory
-  quota), under [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage), "Still to check".
+- **Phase 4's VAST usage field:** built with `used_capacity`; confirm it against
+  `used_effective_capacity` on a real project quota, under [`/allocations/<id>/usage/`](#get-apiv2allocationsidusage), "Still to check".
 
 Answered 2026-11-02 (the first three here on 2026-11-16, the extension ones 2026-11-17) and
 written into [Decisions](#decisions), [Plugin extensions](#plugin-extensions) and the endpoint
