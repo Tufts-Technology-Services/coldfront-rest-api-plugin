@@ -498,17 +498,23 @@ That person's quota and live usage in one area. For home (`/homedir`, on the hpc
   "version": 1,
   "username": "smith01",
   "area": "home",
-  "path": "/homedir",
-  "scope": "user",
-  "quota_source": "override",
-  "soft_limit_bytes": 100000000000,
-  "hard_limit_bytes": 100000000000,
+  "limit_bytes": 100000000000,
   "used_bytes": 85136281441,
-  "used_inodes": 478373,
-  "state": "OK",
-  "retrieved_at": "2026-11-02T23:39:37Z"
+  "state": "ok",
+  "measured_at": "2026-11-02T23:39:37+00:00",
+  "limit_reported_at": "2026-11-02T23:40:12.402113+00:00"
 }
 ```
+
+**The same usage fields as allocations** (decided 2026-11-18, still version 1: the extension had
+only reached s01). `limit_bytes`, `used_bytes`, `state`, `measured_at` and `limit_reported_at`
+mean what they mean on [`/allocations/<id>/usage/`](#one-shape-for-every-source), from the same
+`storage.usage.StorageUsage`: one limit (soft, else hard; 0 is none), the API's own `state`.
+`measured_at` is when VAST last recalculated the area's user usage (every minute or two), and
+`limit_reported_at` when VAST was asked. The earlier `path` (the area's path on VAST, a storage
+system path), `scope` (always "user"), `quota_source` (default or override), `used_inodes`, the
+separate soft and hard limits and VAST's own `state` are gone. A home has no ColdFront figure, so
+there are no `stored_*` fields.
 
 Scratch (`/scratch`, added 2026-11-02) answers in the same shape; its VAST quota was checked on
 2026-11-16 (see [Scratch](#scratch)).
@@ -583,7 +589,7 @@ Two VAST calls were tried on the hpc cluster on 2026-11-02.
 - **`user_quotas`:** only the people **with an override**, nine at the time. Not enough on its
   own: most people are on the default.
 - **`last_user_quotas_update`:** when VAST last recalculated user usage. This becomes the
-  response's `retrieved_at`, since that's how fresh the number really is.
+  response's `measured_at`, since that's how fresh the number really is.
 - **`num_exceeded_users`, `num_blocked_users`:** counts across all users (0 and 84 at the time).
 
 **`GET /userquotas/`** lists every user and group quota entry on the cluster: 16,548 of them,
@@ -603,8 +609,8 @@ paginated (`count`, `next`, `previous`, `results`). Each entry has:
 What that means for the endpoint:
 
 - **`/userquotas/` is the source.** A person's entry gives their limits and usage whether they
-  are on the default or an override. `quota_source` is `"override"` if their limits differ from
-  `default_user_quota`, `"default"` if not.
+  are on the default or an override. (Whether they are on the default isn't reported since
+  2026-11-18.)
 - **Match strictly:** `quota_system_id` equal to the area's quota `system_id`, `is_group` false,
   and then either `identifier_type == "username"` with `identifier` equal to the UTLN, or
   `identifier_type == "uid"` with the person's UID. Never a partial match: `root` and service
@@ -617,9 +623,9 @@ What that means for the endpoint:
   those, so they are never looked up. If a host can't resolve accounts, AD's `uidNumber` is the
   fallback: hpc-cli reads it from there when it creates home folders.
 - **Someone with no entry at all** (never owned a file under `/homedir`, presumably) gets the
-  default limits from `default_user_quota` with `used_bytes: 0` and `"quota_source": "default"`.
-- **Limits can be null.** The response passes `null` through. It doesn't turn null into 0,
-  which would read as "no space at all".
+  default limits from `default_user_quota` with `used_bytes: 0`.
+- **Limits can be null.** `limit_bytes` is the soft limit, else the hard one, and null if
+  neither (or 0) is set. It never turns null into 0, which would read as "no space at all".
 - **No percentages from VAST.** Its `percent_capacity` is null whenever `hard_limit` is, so the
   endpoint returns the raw numbers and leaves the arithmetic to callers.
 
@@ -658,7 +664,7 @@ Then:
   would have been looked up (decided 2026-11-16).
 - **Each area's quota id** is found by path once and cached for an hour: it changes only if the
   quota is recreated. Its `system_id`, default limits and `last_user_quotas_update` are read with
-  each lookup, so `retrieved_at` is current.
+  each lookup, so `measured_at` is current.
 - **Caching:** each person's answer, per area, for two minutes, in Django's cache
   (`coldfront_utils`' `ttl_cache`), which the web workers share. VAST recalculates usage every
   minute or two, so nothing fresher is to be had.
